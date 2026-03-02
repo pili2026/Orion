@@ -1,0 +1,62 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg18
+    container_name: orion-timescaledb
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: orion
+      POSTGRES_USER: orion
+      POSTGRES_PASSWORD: ${ORION_DB_PASSWORD:-change_me}
+      TZ: Asia/Taipei
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orion -d orion"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mosquitto
+    restart: unless-stopped
+    ports:
+      - "8883:8883"
+    volumes:
+      - /opt/mosquitto/config:/mosquitto/config:ro
+      - /opt/mosquitto/certs:/mosquitto/certs:ro
+      - /opt/mosquitto/data:/mosquitto/data
+      - /opt/mosquitto/log:/mosquitto/log
+
+  orion:
+    image: orion:latest
+    container_name: orion
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    environment:
+      TZ: Asia/Taipei
+
+      DB_HOST: timescaledb
+      DB_PORT: "5432"
+      DB_NAME: orion
+      DB_USER: orion
+      DB_PASSWORD: ${ORION_DB_PASSWORD:-change_me}
+
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "8883"
+      MQTT_TLS: "true"
+      MQTT_CAFILE: "/etc/ssl/certs/orion-mqtt-ca.crt"
+      MQTT_INSECURE: "false"
+      MQTT_USERNAME: "orion"
+      MQTT_PASSWORD: ${ORION_MQTT_PASSWORD:-change_me}
+    volumes:
+      - /opt/mosquitto/certs/ca.crt:/etc/ssl/certs/orion-mqtt-ca.crt:ro
+    ports:
+      - "127.0.0.1:8000:8000"
+
+volumes:
+  timescaledb_data:
