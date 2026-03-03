@@ -1,15 +1,37 @@
 package main
 
 import (
-	"github.com/gin-gonic/gin"
+	"log"
+	"os"
+
+	"github.com/hill/orion/internal/config"
+	"github.com/hill/orion/internal/handler"
+	"github.com/hill/orion/internal/repository"
+	"github.com/hill/orion/internal/service"
 )
 
 func main() {
-	r := gin.Default()
+	// 1. load configuration
+	config.Init()
 
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok"})
-	})
+	// 2. Init database connection
+	db := repository.InitDB()
 
-	r.Run(":8080")
+	// 3. Init MQTT client
+	mqttClient := service.InitMQTT()
+
+	// 4. Start HTTP server
+	handler := handler.NewHandler(db, mqttClient)
+	handler.SetupMQTTSubscribers()
+
+	r := handler.SetupRouter()
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	log.Printf("Server running on :%s", port)
+	if err := r.Run(":" + port); err != nil {
+		log.Fatalf("Server failed to start: %v", err)
+	}
 }
