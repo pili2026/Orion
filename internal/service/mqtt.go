@@ -11,8 +11,19 @@ import (
 )
 
 // createTLSConfig builds a TLS config using the CA cert at the given path.
-// ServerName is read from the MQTT_BROKER env var so it stays consistent
-// with the broker address and never needs to be hardcoded.
+//
+// ServerName precedence:
+//  1. MQTT_TLS_SERVER_NAME  — explicit override (use when broker hostname differs from cert CN/SAN)
+//  2. MQTT_BROKER           — fallback (works when both are the same, e.g. production)
+//
+// Local dev example:
+//
+//	MQTT_BROKER=localhost
+//	MQTT_TLS_SERVER_NAME=mqtt.eversource-ai.com
+//
+// Production example (same value, no override needed):
+//
+//	MQTT_BROKER=mqtt.eversource-ai.com
 func createTLSConfig(caCertPath string) (*tls.Config, error) {
 	ca, err := os.ReadFile(caCertPath)
 	if err != nil {
@@ -24,16 +35,20 @@ func createTLSConfig(caCertPath string) (*tls.Config, error) {
 		return nil, fmt.Errorf("failed to parse CA certificate at %q: not valid PEM", caCertPath)
 	}
 
+	serverName := os.Getenv("MQTT_TLS_SERVER_NAME")
+	if serverName == "" {
+		serverName = os.Getenv("MQTT_BROKER")
+	}
+
 	return &tls.Config{
-		RootCAs: certpool,
-		// Use the broker hostname from env so this never needs to be hardcoded.
-		ServerName: os.Getenv("MQTT_BROKER"),
+		RootCAs:    certpool,
+		ServerName: serverName,
 	}, nil
 }
 
 // InitMQTT initialises and connects the MQTT client.
-// It returns an error instead of calling log.Fatalf so the caller
-// (main.go) owns the shutdown decision and deferred cleanups still run.
+// Returns an error instead of calling log.Fatalf so the caller (main.go)
+// owns the shutdown decision and deferred cleanups still run.
 func InitMQTT() (mqtt.Client, error) {
 	broker := os.Getenv("MQTT_BROKER")
 	port := os.Getenv("MQTT_PORT")
@@ -47,8 +62,6 @@ func InitMQTT() (mqtt.Client, error) {
 	opts.SetUsername(os.Getenv("MQTT_USERNAME"))
 	opts.SetPassword(os.Getenv("MQTT_PASSWORD"))
 
-	// Enable automatic reconnection. The OnConnect handler (set below) will
-	// re-subscribe on every successful connection, including reconnects.
 	opts.SetAutoReconnect(true)
 	opts.SetCleanSession(false)
 
@@ -60,11 +73,7 @@ func InitMQTT() (mqtt.Client, error) {
 		opts.SetTLSConfig(tlsCfg)
 	}
 
-	// NOTE: OnConnectHandler is intentionally left nil here.
-	// main.go will call opts.SetOnConnectHandler after creating the Handler,
-	// so the handler has access to h.SetupMQTTSubscribers().
 	opts.SetConnectionLostHandler(func(_ mqtt.Client, err error) {
-		// slog is used project-wide; import it if you add structured logging here.
 		fmt.Printf("MQTT connection lost: %v\n", err)
 	})
 

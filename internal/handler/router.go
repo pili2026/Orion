@@ -15,15 +15,17 @@ import (
 
 // Handler holds every dependency that HTTP and MQTT handlers need.
 type Handler struct {
-	DB   *database.DBManager
-	MQTT mqtt.Client
+	DB         *database.DBManager
+	MQTT       mqtt.Client
+	GatewaySvc GatewayService
 }
 
 // NewHandler creates a new Handler with the provided dependencies.
-func NewHandler(db *database.DBManager, mqttClient mqtt.Client) *Handler {
+func NewHandler(db *database.DBManager, mqttClient mqtt.Client, gatewaySvc GatewayService) *Handler {
 	return &Handler{
-		DB:   db,
-		MQTT: mqttClient,
+		DB:         db,
+		MQTT:       mqttClient,
+		GatewaySvc: gatewaySvc,
 	}
 }
 
@@ -31,9 +33,8 @@ func NewHandler(db *database.DBManager, mqttClient mqtt.Client) *Handler {
 func (h *Handler) SetupRouter() *gin.Engine {
 	r := gin.Default()
 
-	// TRUSTED_PROXIES: comma-separated list of reverse-proxy IPs/CIDRs.
-	// e.g. "10.0.0.1,10.0.0.2/24"
-	// Leave unset (or empty) only in local development — never in production.
+	// TRUSTED_PROXIES: comma-separated IPs/CIDRs of your reverse proxy.
+	// Set to 127.0.0.1 when Nginx runs on the same machine as Orion.
 	if raw := os.Getenv("TRUSTED_PROXIES"); raw != "" {
 		proxies := strings.Split(raw, ",")
 		for i := range proxies {
@@ -43,15 +44,13 @@ func (h *Handler) SetupRouter() *gin.Engine {
 			slog.Error("Failed to set trusted proxies", slog.Any("error", err))
 		}
 	} else {
-		// Disable proxy trust entirely when no list is configured.
-		// This is safe for direct-to-internet or local deployments.
 		if err := r.SetTrustedProxies([]string{}); err != nil {
 			slog.Error("Failed to disable trusted proxies", slog.Any("error", err))
 		}
-		slog.Warn("TRUSTED_PROXIES not set — proxy headers (X-Forwarded-For) will be ignored")
+		slog.Warn("TRUSTED_PROXIES not set — proxy headers will be ignored")
 	}
 
-	// ── Public routes ────────────────────────────────────────────────────────
+	// ── Public ───────────────────────────────────────────────────────────────
 	r.GET("/health", h.healthCheck)
 
 	// ── API v1 ───────────────────────────────────────────────────────────────
@@ -59,7 +58,14 @@ func (h *Handler) SetupRouter() *gin.Engine {
 	//   v1 := r.Group("/api/v1", middleware.Auth())
 	v1 := r.Group("/api/v1")
 	{
-		_ = v1.Group("/gateways") // placeholder – wire real handlers as built
+		gateways := v1.Group("/gateways")
+		{
+			gateways.POST("", h.RegisterGateway)
+			gateways.GET("", h.ListGateways)
+			gateways.GET("/:id", h.GetGateway)
+			gateways.PATCH("/:id", h.UpdateGateway)
+			gateways.DELETE("/:id", h.DeleteGateway)
+		}
 	}
 
 	return r

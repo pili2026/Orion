@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,22 +9,20 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+
+	"github.com/hill/orion/internal/dto"
 )
 
-// ── MQTT mock helpers ────────────────────────────────────────────────────────
+// ── MQTT mock ────────────────────────────────────────────────────────────────
 
-// mockToken satisfies mqtt.Token without doing any real network work.
-// We only need Wait() and Error() for the Subscribe call in SetupMQTTSubscribers.
 type mockToken struct{ mqtt.Token }
 
 func (m *mockToken) Wait() bool   { return true }
 func (m *mockToken) Error() error { return nil }
 
-// mockMQTTClient records Subscribe/Publish calls so tests can assert on them
-// without touching a real broker.
 type mockMQTTClient struct {
-	mqtt.Client // embed to satisfy the full interface with zero-value no-ops
-
+	mqtt.Client
 	SubscribedTopics []string
 	PublishedTopic   string
 	PublishedPayload interface{}
@@ -42,15 +41,42 @@ func (m *mockMQTTClient) Publish(topic string, _ byte, _ bool, payload interface
 
 func (m *mockMQTTClient) AddRoute(_ string, _ mqtt.MessageHandler) {}
 
-// ── Test helpers ─────────────────────────────────────────────────────────────
+// ── GatewayService mock ──────────────────────────────────────────────────────
 
-// newTestHandler builds a Handler with nil DB (acceptable for routes that
-// don't touch the database) and a fresh mockMQTTClient.
-func newTestHandler() (*Handler, *mockMQTTClient) {
-	mock := &mockMQTTClient{}
-	// nil DBManager is fine for handler-level tests that don't hit the DB.
-	h := NewHandler(nil, mock)
-	return h, mock
+// mockGatewayService implements the GatewayService interface.
+// Each method can be overridden per-test by setting the corresponding func field.
+type mockGatewayService struct {
+	RegisterFn func(ctx context.Context, req dto.CreateGatewayRequest) (*dto.RegisterGatewayResponse, error)
+	ListFn     func(ctx context.Context) ([]dto.GatewayResponse, error)
+	GetByIDFn  func(ctx context.Context, id uuid.UUID) (*dto.GatewayResponse, error)
+	UpdateFn   func(ctx context.Context, id uuid.UUID, req dto.UpdateGatewayRequest) (*dto.GatewayResponse, error)
+	DeleteFn   func(ctx context.Context, id uuid.UUID) error
+}
+
+func (m *mockGatewayService) Register(ctx context.Context, req dto.CreateGatewayRequest) (*dto.RegisterGatewayResponse, error) {
+	return m.RegisterFn(ctx, req)
+}
+func (m *mockGatewayService) List(ctx context.Context) ([]dto.GatewayResponse, error) {
+	return m.ListFn(ctx)
+}
+func (m *mockGatewayService) GetByID(ctx context.Context, id uuid.UUID) (*dto.GatewayResponse, error) {
+	return m.GetByIDFn(ctx, id)
+}
+func (m *mockGatewayService) Update(ctx context.Context, id uuid.UUID, req dto.UpdateGatewayRequest) (*dto.GatewayResponse, error) {
+	return m.UpdateFn(ctx, id, req)
+}
+func (m *mockGatewayService) Delete(ctx context.Context, id uuid.UUID) error {
+	return m.DeleteFn(ctx, id)
+}
+
+// ── Test helper ──────────────────────────────────────────────────────────────
+
+func newTestHandler() (*Handler, *mockMQTTClient, *mockGatewayService) {
+	mqttMock := &mockMQTTClient{}
+	svcMock := &mockGatewayService{}
+	// nil DBManager is acceptable for handler-level tests that don't hit the DB.
+	h := NewHandler(nil, mqttMock, svcMock)
+	return h, mqttMock, svcMock
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -58,19 +84,17 @@ func newTestHandler() (*Handler, *mockMQTTClient) {
 func TestHealthCheck(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	h, _ := newTestHandler()
+	h, _, _ := newTestHandler()
 	r := h.SetupRouter()
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	// Status
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	// Body: {"status":"ok"}
 	var body map[string]string
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatalf("failed to decode response body: %v", err)
@@ -80,12 +104,10 @@ func TestHealthCheck(t *testing.T) {
 	}
 }
 
-// TestUnknownRouteReturns404 ensures the router does not accidentally expose
-// old debug endpoints (e.g. the removed /publish route).
 func TestUnknownRouteReturns404(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	h, _ := newTestHandler()
+	h, _, _ := newTestHandler()
 	r := h.SetupRouter()
 
 	for _, path := range []string{"/publish", "/debug", "/api/v99/unknown"} {
@@ -99,12 +121,10 @@ func TestUnknownRouteReturns404(t *testing.T) {
 	}
 }
 
-// TestSetupMQTTSubscribers verifies that all four expected uplink topics
-// are subscribed when SetupMQTTSubscribers is called.
 func TestSetupMQTTSubscribers(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	h, mock := newTestHandler()
+	h, mqttMock, _ := newTestHandler()
 	h.SetupMQTTSubscribers()
 
 	expected := map[string]bool{
@@ -114,7 +134,7 @@ func TestSetupMQTTSubscribers(t *testing.T) {
 		"talos/+/response":  false,
 	}
 
-	for _, topic := range mock.SubscribedTopics {
+	for _, topic := range mqttMock.SubscribedTopics {
 		if _, ok := expected[topic]; ok {
 			expected[topic] = true
 		}
@@ -124,5 +144,49 @@ func TestSetupMQTTSubscribers(t *testing.T) {
 		if !found {
 			t.Errorf("expected subscription to %q was not registered", topic)
 		}
+	}
+}
+
+func TestListGateways_OK(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	h, _, svc := newTestHandler()
+
+	svc.ListFn = func(_ context.Context) ([]dto.GatewayResponse, error) {
+		return []dto.GatewayResponse{
+			{ID: "abc-123", DisplayName: "Test GW", Status: "offline"},
+		}, nil
+	}
+
+	r := h.SetupRouter()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateways", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var body []dto.GatewayResponse
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode body: %v", err)
+	}
+	if len(body) != 1 || body[0].ID != "abc-123" {
+		t.Errorf("unexpected response body: %+v", body)
+	}
+}
+
+func TestGetGateway_InvalidUUID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	h, _, _ := newTestHandler()
+	r := h.SetupRouter()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateways/not-a-uuid", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid UUID, got %d", w.Code)
 	}
 }
