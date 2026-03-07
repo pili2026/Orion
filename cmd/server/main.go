@@ -5,8 +5,9 @@ import (
 	"os"
 
 	"github.com/hill/orion/internal/config"
+	"github.com/hill/orion/internal/database"
+
 	"github.com/hill/orion/internal/handler"
-	"github.com/hill/orion/internal/repository"
 	"github.com/hill/orion/internal/service"
 )
 
@@ -15,7 +16,7 @@ func main() {
 	config.Init()
 
 	// 2. Init database connection
-	db := repository.InitDB()
+	db := database.InitDB()
 
 	// 3. Init MQTT client
 	mqttClient := service.InitMQTT()
