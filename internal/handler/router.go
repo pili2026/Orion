@@ -2,63 +2,69 @@
 package handler
 
 import (
-	"log"
+	"log/slog"
+	"net/http"
+	"os"
+	"strings"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
+
+	"github.com/hill/orion/internal/database"
 )
 
-// Handler struct holds the database connection and MQTT client for use in route handlers.
+// Handler holds every dependency that HTTP and MQTT handlers need.
 type Handler struct {
-	DB   *gorm.DB
+	DB   *database.DBManager
 	MQTT mqtt.Client
 }
 
-// NewHandler creates a new Handler instance with the provided database connection and MQTT client.
-func NewHandler(db *gorm.DB, mqttClient mqtt.Client) *Handler {
+// NewHandler creates a new Handler with the provided dependencies.
+func NewHandler(db *database.DBManager, mqttClient mqtt.Client) *Handler {
 	return &Handler{
 		DB:   db,
 		MQTT: mqttClient,
 	}
 }
 
+// SetupRouter registers all HTTP routes and returns the engine.
 func (h *Handler) SetupRouter() *gin.Engine {
 	r := gin.Default()
 
-	// Replace with actual trusted proxies if needed, or set to nil to trust all (not recommended for production)
-	if err := r.SetTrustedProxies(nil); err != nil {
-		log.Printf("Failed to set trusted proxies: %v", err)
+	// TRUSTED_PROXIES: comma-separated list of reverse-proxy IPs/CIDRs.
+	// e.g. "10.0.0.1,10.0.0.2/24"
+	// Leave unset (or empty) only in local development — never in production.
+	if raw := os.Getenv("TRUSTED_PROXIES"); raw != "" {
+		proxies := strings.Split(raw, ",")
+		for i := range proxies {
+			proxies[i] = strings.TrimSpace(proxies[i])
+		}
+		if err := r.SetTrustedProxies(proxies); err != nil {
+			slog.Error("Failed to set trusted proxies", slog.Any("error", err))
+		}
+	} else {
+		// Disable proxy trust entirely when no list is configured.
+		// This is safe for direct-to-internet or local deployments.
+		if err := r.SetTrustedProxies([]string{}); err != nil {
+			slog.Error("Failed to disable trusted proxies", slog.Any("error", err))
+		}
+		slog.Warn("TRUSTED_PROXIES not set — proxy headers (X-Forwarded-For) will be ignored")
 	}
 
-	// Health check endpoint
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok"})
-	})
+	// ── Public routes ────────────────────────────────────────────────────────
+	r.GET("/health", h.healthCheck)
 
-	// 測試：透過 API 發送控制指令給 Edge 設備
-	r.POST("/publish", func(c *gin.Context) {
-		// 指定發送到 Talos 的指令頻道
-		topic := "talos/command/edge_device_002"
-
-		// 模擬一個要叫設備重啟或開關的 JSON 指令
-		payload := `{"action": "turn_on_fan", "speed": 100}`
-
-		// 使用 DI 注入的 MQTT Client 發送訊息 (QoS 1)
-		token := h.MQTT.Publish(topic, 1, false, payload)
-		token.Wait()
-
-		if token.Error() != nil {
-			c.JSON(500, gin.H{"error": "指令發送失敗: " + token.Error().Error()})
-			return
-		}
-
-		c.JSON(200, gin.H{
-			"message": "指令已成功發送給 Edge 設備！",
-			"topic":   topic,
-			"payload": payload,
-		})
-	})
+	// ── API v1 ───────────────────────────────────────────────────────────────
+	// Add auth middleware here once implemented:
+	//   v1 := r.Group("/api/v1", middleware.Auth())
+	v1 := r.Group("/api/v1")
+	{
+		_ = v1.Group("/gateways") // placeholder – wire real handlers as built
+	}
 
 	return r
+}
+
+func (h *Handler) healthCheck(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }

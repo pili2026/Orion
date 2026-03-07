@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,61 +10,119 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 1. Create a mock Token to satisfy the mqtt.Token interface without doing any real work
-type mockToken struct {
-	mqtt.Token // Tips: We can embed the original interface to avoid implementing all its methods, since we only care about Wait() and Error() in this test
-}
+// ── MQTT mock helpers ────────────────────────────────────────────────────────
+
+// mockToken satisfies mqtt.Token without doing any real network work.
+// We only need Wait() and Error() for the Subscribe call in SetupMQTTSubscribers.
+type mockToken struct{ mqtt.Token }
 
 func (m *mockToken) Wait() bool   { return true }
 func (m *mockToken) Error() error { return nil }
 
-// 2. Create a mock MQTT client that records the topic and payload it was asked to publish, instead of sending real network requests
-type MockMQTTClient struct {
-	mqtt.Client // Same as above, we embed the original interface to avoid implementing all methods, since we only care about Publish() in this test
+// mockMQTTClient records Subscribe/Publish calls so tests can assert on them
+// without touching a real broker.
+type mockMQTTClient struct {
+	mqtt.Client // embed to satisfy the full interface with zero-value no-ops
 
-	// These fields will store the topic and payload that our test will check later
+	SubscribedTopics []string
 	PublishedTopic   string
 	PublishedPayload interface{}
 }
 
-// Override the Publish method to capture the topic and payload instead of sending them to a real MQTT broker
-func (m *MockMQTTClient) Publish(topic string, qos byte, retained bool, payload interface{}) mqtt.Token {
+func (m *mockMQTTClient) Subscribe(topic string, _ byte, _ mqtt.MessageHandler) mqtt.Token {
+	m.SubscribedTopics = append(m.SubscribedTopics, topic)
+	return &mockToken{}
+}
+
+func (m *mockMQTTClient) Publish(topic string, _ byte, _ bool, payload interface{}) mqtt.Token {
 	m.PublishedTopic = topic
 	m.PublishedPayload = payload
 	return &mockToken{}
 }
 
-// 3. Now we can write our test function to verify that when we hit the /publish endpoint, it calls Publish() with the correct topic and payload
-func TestPublishRoute(t *testing.T) {
-	// Set Gin to Test Mode to avoid unnecessary output during testing
+func (m *mockMQTTClient) AddRoute(_ string, _ mqtt.MessageHandler) {}
+
+// ── Test helpers ─────────────────────────────────────────────────────────────
+
+// newTestHandler builds a Handler with nil DB (acceptable for routes that
+// don't touch the database) and a fresh mockMQTTClient.
+func newTestHandler() (*Handler, *mockMQTTClient) {
+	mock := &mockMQTTClient{}
+	// nil DBManager is fine for handler-level tests that don't hit the DB.
+	h := NewHandler(nil, mock)
+	return h, mock
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+func TestHealthCheck(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	// A. Create an instance of our Handler with the MockMQTTClient, and set up the router
-	mockMQTT := &MockMQTTClient{}
-	// Note: We can pass nil for the DB since our /publish route doesn't interact with the database in this test
-	h := NewHandler(nil, mockMQTT)
+	h, _ := newTestHandler()
 	r := h.SetupRouter()
 
-	// B. Prepare a test HTTP request to the /publish endpoint, and a ResponseRecorder to capture the response
-	req, _ := http.NewRequest(http.MethodPost, "/publish", nil)
-	w := httptest.NewRecorder() // This will capture the HTTP response for us to inspect later
-
-	// C. Execute the request against our router
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	// D. Assert the results:
-	// Assertion 1: Check that we got a 200 OK response from the server
+	// Status
 	if w.Code != http.StatusOK {
-		t.Errorf("❌ Expected status code 200, got %d", w.Code)
+		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	// Assertion 2: Check that our MockMQTTClient's Publish method was called with the expected topic and payload
-	if mockMQTT.PublishedTopic != "test/topic" {
-		t.Errorf("❌ Expected published topic 'test/topic', got '%s'", mockMQTT.PublishedTopic)
+	// Body: {"status":"ok"}
+	var body map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response body: %v", err)
+	}
+	if body["status"] != "ok" {
+		t.Errorf(`expected body["status"] == "ok", got %q`, body["status"])
+	}
+}
+
+// TestUnknownRouteReturns404 ensures the router does not accidentally expose
+// old debug endpoints (e.g. the removed /publish route).
+func TestUnknownRouteReturns404(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	h, _ := newTestHandler()
+	r := h.SetupRouter()
+
+	for _, path := range []string{"/publish", "/debug", "/api/v99/unknown"} {
+		req := httptest.NewRequest(http.MethodPost, path, nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Errorf("path %q: expected 404, got %d", path, w.Code)
+		}
+	}
+}
+
+// TestSetupMQTTSubscribers verifies that all four expected uplink topics
+// are subscribed when SetupMQTTSubscribers is called.
+func TestSetupMQTTSubscribers(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	h, mock := newTestHandler()
+	h.SetupMQTTSubscribers()
+
+	expected := map[string]bool{
+		"talos/+/telemetry": false,
+		"talos/+/status":    false,
+		"talos/+/event":     false,
+		"talos/+/response":  false,
 	}
 
-	expectedPayload := "Hello via DI!"
-	if mockMQTT.PublishedPayload != expectedPayload {
-		t.Errorf("❌ Expected published payload '%s', got '%v'", expectedPayload, mockMQTT.PublishedPayload)
+	for _, topic := range mock.SubscribedTopics {
+		if _, ok := expected[topic]; ok {
+			expected[topic] = true
+		}
+	}
+
+	for topic, found := range expected {
+		if !found {
+			t.Errorf("expected subscription to %q was not registered", topic)
+		}
 	}
 }

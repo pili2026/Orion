@@ -40,19 +40,26 @@ services:
     environment:
       TZ: Asia/Taipei
 
+      # Database — names match .env.example exactly
       DB_HOST: timescaledb
       DB_PORT: "5432"
       DB_NAME: orion
       DB_USER: orion
       DB_PASSWORD: ${ORION_DB_PASSWORD:-change_me}
 
-      MQTT_HOST: mosquitto
+      # MQTT — names match .env.example and service/mqtt.go exactly
+      # Previously this was MQTT_HOST, which caused InitMQTT() to read an empty string.
+      MQTT_BROKER: mosquitto
       MQTT_PORT: "8883"
-      MQTT_TLS: "true"
-      MQTT_CAFILE: "/etc/ssl/certs/orion-mqtt-ca.crt"
-      MQTT_INSECURE: "false"
-      MQTT_USERNAME: "orion"
+      MQTT_USERNAME: orion
       MQTT_PASSWORD: ${ORION_MQTT_PASSWORD:-change_me}
+      MQTT_CA_CERT: /etc/ssl/certs/orion-mqtt-ca.crt
+
+      # Nginx and Orion are on the same machine, so the proxy source is always loopback.
+      # Setting this to an empty string will cause Gin to ignore X-Forwarded-For 
+      # and treat all requests as coming from the proxy, 
+      # which is fine for local development but not for production.
+      TRUSTED_PROXIES: "127.0.0.1"
     volumes:
       - /opt/mosquitto/certs/ca.crt:/etc/ssl/certs/orion-mqtt-ca.crt:ro
     ports:
