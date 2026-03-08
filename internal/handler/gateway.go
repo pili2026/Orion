@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hill/orion/internal/dto"
-	"github.com/hill/orion/internal/repository"
+	"github.com/hill/orion/pkg/apperr"
 )
 
 // TelemetryService is the interface the telemetry handler depends on.
@@ -73,7 +73,7 @@ func (h *Handler) GetGateway(c *gin.Context) {
 	}
 
 	gw, err := h.GatewaySvc.GetByID(c.Request.Context(), id)
-	if errors.Is(err, repository.ErrGatewayNotFound) {
+	if errors.Is(err, apperr.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "gateway not found"})
 		return
 	}
@@ -100,7 +100,7 @@ func (h *Handler) UpdateGateway(c *gin.Context) {
 	}
 
 	gw, err := h.GatewaySvc.Update(c.Request.Context(), id, req)
-	if errors.Is(err, repository.ErrGatewayNotFound) {
+	if errors.Is(err, apperr.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "gateway not found"})
 		return
 	}
@@ -122,7 +122,7 @@ func (h *Handler) DeleteGateway(c *gin.Context) {
 	}
 
 	err := h.GatewaySvc.Delete(c.Request.Context(), id)
-	if errors.Is(err, repository.ErrGatewayNotFound) {
+	if errors.Is(err, apperr.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "gateway not found"})
 		return
 	}

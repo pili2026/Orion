@@ -9,10 +9,12 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/hill/orion/internal/model"
+	"github.com/hill/orion/pkg/apperr"
 )
 
 // ErrGatewayNotFound is returned when a gateway lookup yields no result.
-var ErrGatewayNotFound = errors.New("gateway not found")
+// It wraps apperr.ErrNotFound so handlers can use errors.Is(err, apperr.ErrNotFound).
+var ErrGatewayNotFound = fmt.Errorf("gateway not found: %w", apperr.ErrNotFound)
 
 // GatewayRepository defines the data-access contract for gateways.
 type GatewayRepository interface {

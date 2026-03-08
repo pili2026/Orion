@@ -9,9 +9,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/hill/orion/pkg/apperr"
 )
 
-var ErrNoData = errors.New("no telemetry data found")
+var ErrNoData = fmt.Errorf("no telemetry data found: %w", apperr.ErrNotFound)
 
 // ── Row types ─────────────────────────────────────────────────────────────────
 

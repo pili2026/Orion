@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hill/orion/internal/dto"
-	"github.com/hill/orion/internal/repository"
+	"github.com/hill/orion/pkg/apperr"
 )
 
 // SiteService is the interface the site handler depends on.
@@ -47,7 +47,7 @@ func (h *Handler) GetSite(c *gin.Context) {
 		return
 	}
 	site, err := h.SiteSvc.GetByID(c.Request.Context(), id)
-	if errors.Is(err, repository.ErrSiteNotFound) {
+	if errors.Is(err, apperr.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "site not found"})
 		return
 	}
@@ -84,7 +84,7 @@ func (h *Handler) UpdateSite(c *gin.Context) {
 		return
 	}
 	site, err := h.SiteSvc.Update(c.Request.Context(), id, req)
-	if errors.Is(err, repository.ErrSiteNotFound) {
+	if errors.Is(err, apperr.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "site not found"})
 		return
 	}
@@ -102,7 +102,7 @@ func (h *Handler) DeleteSite(c *gin.Context) {
 		return
 	}
 	err = h.SiteSvc.Delete(c.Request.Context(), id)
-	if errors.Is(err, repository.ErrSiteNotFound) {
+	if errors.Is(err, apperr.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "site not found"})
 		return
 	}
@@ -122,7 +122,7 @@ func (h *Handler) ListZones(c *gin.Context) {
 		return
 	}
 	zones, err := h.ZoneSvc.List(c.Request.Context(), siteID)
-	if errors.Is(err, repository.ErrSiteNotFound) {
+	if errors.Is(err, apperr.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "site not found"})
 		return
 	}
@@ -145,7 +145,7 @@ func (h *Handler) CreateZone(c *gin.Context) {
 		return
 	}
 	zone, err := h.ZoneSvc.Create(c.Request.Context(), siteID, req)
-	if errors.Is(err, repository.ErrSiteNotFound) {
+	if errors.Is(err, apperr.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "site not found"})
 		return
 	}
@@ -173,7 +173,7 @@ func (h *Handler) UpdateZone(c *gin.Context) {
 		return
 	}
 	zone, err := h.ZoneSvc.Update(c.Request.Context(), siteID, zoneID, req)
-	if errors.Is(err, repository.ErrZoneNotFound) {
+	if errors.Is(err, apperr.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "zone not found"})
 		return
 	}
@@ -196,7 +196,7 @@ func (h *Handler) DeleteZone(c *gin.Context) {
 		return
 	}
 	err = h.ZoneSvc.Delete(c.Request.Context(), siteID, zoneID)
-	if errors.Is(err, repository.ErrZoneNotFound) {
+	if errors.Is(err, apperr.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "zone not found"})
 		return
 	}

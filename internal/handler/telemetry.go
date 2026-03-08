@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hill/orion/internal/dto"
-	"github.com/hill/orion/internal/repository"
+	"github.com/hill/orion/pkg/apperr"
 )
 
 // ── GET /api/v1/devices/:id/latest ───────────────────────────────────────────
@@ -23,7 +23,7 @@ func (h *Handler) LatestByDevice(c *gin.Context) {
 
 	data, err := h.TelemetrySvc.LatestByDevice(c.Request.Context(), id)
 	if err != nil {
-		if errors.Is(err, repository.ErrNoData) {
+		if errors.Is(err, apperr.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "no telemetry data found"})
 			return
 		}
@@ -45,7 +45,7 @@ func (h *Handler) LatestByAssignment(c *gin.Context) {
 
 	data, err := h.TelemetrySvc.LatestByAssignment(c.Request.Context(), id)
 	if err != nil {
-		if errors.Is(err, repository.ErrNoData) {
+		if errors.Is(err, apperr.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "no telemetry data found"})
 			return
 		}

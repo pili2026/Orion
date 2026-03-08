@@ -9,10 +9,11 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/hill/orion/internal/model"
+	"github.com/hill/orion/pkg/apperr"
 )
 
-var ErrSiteNotFound = errors.New("site not found")
-var ErrZoneNotFound = errors.New("zone not found")
+var ErrSiteNotFound = fmt.Errorf("site not found: %w", apperr.ErrNotFound)
+var ErrZoneNotFound = fmt.Errorf("zone not found: %w", apperr.ErrNotFound)
 
 // ── Site ──────────────────────────────────────────────────────────────────────
 
