@@ -15,17 +15,23 @@ import (
 
 // Handler holds every dependency that HTTP and MQTT handlers need.
 type Handler struct {
-	DB         *database.DBManager
-	MQTT       mqtt.Client
-	GatewaySvc GatewayService
+	DB           *database.DBManager
+	MQTT         mqtt.Client
+	GatewaySvc   GatewayService
+	TelemetrySvc TelemetryService
+	SiteSvc      SiteService
+	ZoneSvc      ZoneService
 }
 
 // NewHandler creates a new Handler with the provided dependencies.
-func NewHandler(db *database.DBManager, mqttClient mqtt.Client, gatewaySvc GatewayService) *Handler {
+func NewHandler(db *database.DBManager, mqttClient mqtt.Client, gatewaySvc GatewayService, telemetrySvc TelemetryService, siteSvc SiteService, zoneSvc ZoneService) *Handler {
 	return &Handler{
-		DB:         db,
-		MQTT:       mqttClient,
-		GatewaySvc: gatewaySvc,
+		DB:           db,
+		MQTT:         mqttClient,
+		GatewaySvc:   gatewaySvc,
+		TelemetrySvc: telemetrySvc,
+		SiteSvc:      siteSvc,
+		ZoneSvc:      zoneSvc,
 	}
 }
 
@@ -65,6 +71,37 @@ func (h *Handler) SetupRouter() *gin.Engine {
 			gateways.GET("/:id", h.GetGateway)
 			gateways.PATCH("/:id", h.UpdateGateway)
 			gateways.DELETE("/:id", h.DeleteGateway)
+		}
+
+		// Telemetry — device-level (SE, CI, SF)
+		devices := v1.Group("/devices")
+		{
+			devices.GET("/:id/latest", h.LatestByDevice)
+			devices.GET("/:id/history", h.HistoryByDevice)
+		}
+
+		// Telemetry — sensor/assignment-level (ST, SP, SR, SO)
+		assignments := v1.Group("/assignments")
+		{
+			assignments.GET("/:id/latest", h.LatestByAssignment)
+			assignments.GET("/:id/history", h.HistoryByAssignment)
+		}
+
+		// Sites
+		sites := v1.Group("/sites")
+		{
+			sites.GET("", h.ListSites)
+			sites.POST("", h.CreateSite)
+			sites.GET("/:id", h.GetSite)
+			sites.PATCH("/:id", h.UpdateSite)
+			sites.DELETE("/:id", h.DeleteSite)
+			sites.GET("/:id/latest", h.LatestBySite)
+
+			// Zones (nested under site)
+			sites.GET("/:id/zones", h.ListZones)
+			sites.POST("/:id/zones", h.CreateZone)
+			sites.PATCH("/:id/zones/:zone_id", h.UpdateZone)
+			sites.DELETE("/:id/zones/:zone_id", h.DeleteZone)
 		}
 	}
 

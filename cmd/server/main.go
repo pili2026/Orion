@@ -60,7 +60,16 @@ func main() {
 	dynsec := service.NewDynsecService(mqttClient)
 	gatewaySvc := service.NewGatewayService(gatewayRepo, dynsec)
 
-	h := handler.NewHandler(dbManager, mqttClient, gatewaySvc)
+	telemetryRepo := repository.NewTelemetryRepository(dbManager.PgxPool)
+	telemetrySvc := service.NewTelemetryService(telemetryRepo, dbManager.GormDB)
+
+	siteRepo := repository.NewSiteRepository(dbManager.GormDB)
+	siteSvc := service.NewSiteService(siteRepo)
+
+	zoneRepo := repository.NewZoneRepository(dbManager.GormDB)
+	zoneSvc := service.NewZoneService(zoneRepo, siteRepo)
+
+	h := handler.NewHandler(dbManager, mqttClient, gatewaySvc, telemetrySvc, siteSvc, zoneSvc)
 
 	// Re-subscribe on every (re)connect so subscriptions survive broker restarts.
 	h.SetupMQTTSubscribers()

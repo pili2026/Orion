@@ -27,6 +27,10 @@ type TelemetryConfig struct {
 	BatchSleepMs int       // ms to sleep between batches (rate limiting)
 	From         time.Time // only migrate rows with id >= From
 	To           time.Time // only migrate rows with id <= To
+
+	// Optional filters — empty slice means "all"
+	UtilityIDs  []string // e.g. ["05755a6b1a1"] — filter by utility_id
+	DeviceTypes []string // e.g. ["SE", "CI"] — filter by device_type
 }
 
 // ── ETLCheckpoint ─────────────────────────────────────────────────────────────
@@ -78,10 +82,21 @@ func (w *TelemetryWorker) Run(ctx context.Context) error {
 	log := slog.Default().With(slog.String("component", "TelemetryWorker"))
 
 	var entries []ETLTableMap
-	if err := w.dstDB.WithContext(ctx).Find(&entries).Error; err != nil {
+	q := w.dstDB.WithContext(ctx)
+	if len(w.cfg.UtilityIDs) > 0 {
+		q = q.Where("utility_id IN ?", w.cfg.UtilityIDs)
+	}
+	if len(w.cfg.DeviceTypes) > 0 {
+		q = q.Where("device_type IN ?", w.cfg.DeviceTypes)
+	}
+	if err := q.Find(&entries).Error; err != nil {
 		return fmt.Errorf("load etl_table_map: %w", err)
 	}
-	log.Info("Loaded table map", slog.Int("tables", len(entries)))
+	log.Info("Loaded table map",
+		slog.Int("tables", len(entries)),
+		slog.Any("utility_ids", w.cfg.UtilityIDs),
+		slog.Any("device_types", w.cfg.DeviceTypes),
+	)
 
 	sem := make(chan struct{}, w.cfg.Workers)
 	var wg sync.WaitGroup

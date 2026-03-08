@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -12,6 +13,15 @@ import (
 	"github.com/hill/orion/internal/dto"
 	"github.com/hill/orion/internal/repository"
 )
+
+// TelemetryService is the interface the telemetry handler depends on.
+type TelemetryService interface {
+	LatestByDevice(ctx context.Context, deviceID uuid.UUID) (any, error)
+	LatestByAssignment(ctx context.Context, assignmentID uuid.UUID) (*dto.LatestSensorResponse, error)
+	LatestBySite(ctx context.Context, siteID uuid.UUID) (*dto.SiteLatestResponse, error)
+	HistoryByDevice(ctx context.Context, deviceID uuid.UUID, from, to time.Time) (any, error)
+	HistoryByAssignment(ctx context.Context, assignmentID uuid.UUID, from, to time.Time) ([]dto.LatestSensorResponse, error)
+}
 
 // GatewayService is the interface the handler depends on.
 // Declaring it here (not in service/) keeps the dependency pointing inward

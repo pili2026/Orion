@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -101,11 +102,21 @@ func main() {
 	from := parseTime(getenv("ETL_FROM", now.AddDate(-1, 0, 0).Format("2006-01-02")))
 	to := parseTime(getenv("ETL_TO", now.Format("2006-01-02")))
 
+	// ETL_UTILITY_IDS: comma-separated utility_ids to filter (empty = all)
+	// e.g. ETL_UTILITY_IDS=05755a6b1a1,12345x
+	utilityIDs := splitCSV(os.Getenv("ETL_UTILITY_IDS"))
+
+	// ETL_DEVICE_TYPES: comma-separated device types to filter (empty = all)
+	// e.g. ETL_DEVICE_TYPES=SE,CI
+	deviceTypes := splitCSV(os.Getenv("ETL_DEVICE_TYPES"))
+
 	slog.Info("ETL parameters",
 		slog.Int("workers", workers),
 		slog.Int("batch_sleep_ms", batchSleepMs),
 		slog.Time("from", from),
 		slog.Time("to", to),
+		slog.Any("utility_ids", utilityIDs),
+		slog.Any("device_types", deviceTypes),
 	)
 
 	cfg := etl.TelemetryConfig{
@@ -113,6 +124,8 @@ func main() {
 		BatchSleepMs: batchSleepMs,
 		From:         from,
 		To:           to,
+		UtilityIDs:   utilityIDs,
+		DeviceTypes:  deviceTypes,
 	}
 
 	// ── Run worker ────────────────────────────────────────────────────────────
@@ -172,6 +185,20 @@ func parseInt(s string) int {
 		return 1
 	}
 	return n
+}
+
+func splitCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func parseTime(s string) time.Time {

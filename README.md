@@ -20,23 +20,29 @@ A cloud server for IoT/industrial monitoring, built with Go for high performance
 orion/
 ├── cmd/
 │   ├── server/
-│   │   └── main.go             # Application entry point
-│   └── migrate/
-│       └── main.go             # Database migration runner
+│   │   └── main.go             # Application entry point (graceful shutdown, DI wiring)
+│   ├── migrate/
+│   │   └── main.go             # Database migration runner (golang-migrate)
+│   ├── etl-meta/
+│   │   └── main.go             # Stage 2: migrate metadata from legacy MariaDB
+│   └── etl-telemetry/
+│       └── main.go             # Stage 3: migrate time-series data (checkpoint/resume)
 │
 ├── internal/
 │   ├── config/                 # Environment variable loading
-│   ├── database/               # DBManager (GORM + pgxpool)
+│   ├── database/               # DBManager (GORM + pgxpool dual connection)
 │   ├── handler/                # HTTP handlers & MQTT subscribers
-│   ├── service/                # Business logic (gateway, dynsec, mqtt)
-│   ├── repository/             # Database access layer
+│   ├── service/                # Business logic (gateway, site, zone, telemetry, dynsec, mqtt)
+│   ├── repository/             # Database access layer (GORM + pgx)
 │   ├── model/                  # GORM struct definitions
 │   ├── dto/                    # Request & response structs
+│   ├── etl/                    # ETL pipeline (parser, seeder, telemetry worker)
 │   └── middleware/             # Gin middleware (auth, logging, CORS)
 │
 ├── migrations/                 # SQL migration files (golang-migrate)
-│   ├── 001_init_schema.up.sql
-│   └── 001_init_schema.down.sql
+│   ├── 001_init_schema          # Core schema (sites, zones, gateways, devices, telemetry)
+│   ├── 002_etl_tables           # ETL helpers (etl_table_map, etl_checkpoints)
+│   └── 003_hypertables          # TimescaleDB hypertables + compression policies
 │
 ├── pkg/
 │   ├── logger/                 # Centralized logging
@@ -72,7 +78,7 @@ HTTP Request → Middleware → Handler → Service → Repository → Database
 | -------------- | --------------------------------------------------- |
 | **Handler**    | Parse & validate request, return response           |
 | **Service**    | Business logic, orchestrate repositories and dynsec |
-| **Repository** | All database operations (GORM)                      |
+| **Repository** | All database operations (GORM / pgx)                |
 | **Model**      | Database schema definitions                         |
 | **DTO**        | API input/output structures (separate from models)  |
 
@@ -121,7 +127,7 @@ cd orion
 
 ```bash
 cp .env.example .env
-# Fill in DB_USER, DB_PASSWORD, DB_NAME, MQTT_USERNAME, MQTT_PASSWORD
+# Fill in DB credentials, MQTT credentials, and other required values
 ```
 
 **3. Start infrastructure**
@@ -175,19 +181,60 @@ go run cmd/migrate/main.go down
 go run cmd/migrate/main.go version
 ```
 
-### Adding a new migration
-
-```bash
-# Create the next migration pair manually
-touch migrations/002_add_your_change.up.sql
-touch migrations/002_add_your_change.down.sql
-
-# Apply
-go run cmd/migrate/main.go up
-```
-
 > **Never edit an existing migration file that has already been applied.**
 > Always create a new numbered migration for schema changes.
+
+---
+
+## ETL Pipeline (Legacy MariaDB → TimescaleDB)
+
+The ETL pipeline migrates historical data from the legacy `ima_thing` MariaDB database
+into Orion's TimescaleDB hypertables. It runs as two independent CLI commands.
+
+### Stage 2 — Metadata (`etl-meta`)
+
+Scans legacy table names, parses device identifiers, and seeds the Orion metadata tables:
+`sites`, `zones`, `gateways`, `devices`, `point_assignments`, and `etl_table_map`.
+
+```bash
+go run cmd/etl-meta/main.go
+```
+
+This command is **idempotent** — safe to re-run if interrupted.
+
+### Stage 3 — Telemetry (`etl-telemetry`)
+
+Reads `etl_table_map` and migrates time-series rows into the appropriate hypertable.
+Supports checkpoint/resume — interrupted runs pick up where they left off.
+
+```bash
+# Migrate everything (default: last 1 year)
+go run cmd/etl-telemetry/main.go
+
+# Specify a date range
+ETL_FROM=2024-01-01 ETL_TO=2024-06-30 go run cmd/etl-telemetry/main.go
+
+# Migrate a specific site only
+ETL_UTILITY_IDS=05755a6b1a1 go run cmd/etl-telemetry/main.go
+
+# Combine filters — one site, one month, SE devices only
+ETL_UTILITY_IDS=05755a6b1a1 ETL_FROM=2024-01-01 ETL_TO=2024-01-31 ETL_DEVICE_TYPES=SE \
+  go run cmd/etl-telemetry/main.go
+```
+
+### ETL Environment Variables
+
+| Variable             | Default    | Description                                      |
+| -------------------- | ---------- | ------------------------------------------------ |
+| `ETL_WORKERS`        | `1`        | Number of concurrent table workers               |
+| `ETL_BATCH_SLEEP_MS` | `200`      | Sleep between batches (ms) — rate limiting       |
+| `ETL_FROM`           | 1 year ago | Start of date range (`YYYY-MM-DD`)               |
+| `ETL_TO`             | today      | End of date range (`YYYY-MM-DD`)                 |
+| `ETL_UTILITY_IDS`    | _(all)_    | Comma-separated utility IDs to filter            |
+| `ETL_DEVICE_TYPES`   | _(all)_    | Comma-separated device types (`SE`, `CI`, `SF`…) |
+
+> `ETL_WORKERS` and `ETL_BATCH_SLEEP_MS` are stable settings — put them in `.env`.
+> The other parameters change per run — pass them on the command line.
 
 ---
 
@@ -197,16 +244,32 @@ Interactive API documentation is available via the Bruno collection in `docs/api
 
 Open Bruno → **Open Collection** → select `docs/api/`, then switch to the **local** environment.
 
-### Available endpoints
+### Endpoints
 
-| Method   | Path                   | Description                       |
-| -------- | ---------------------- | --------------------------------- |
-| `GET`    | `/health`              | Liveness probe                    |
-| `POST`   | `/api/v1/gateways`     | Register a new Edge gateway       |
-| `GET`    | `/api/v1/gateways`     | List all gateways                 |
-| `GET`    | `/api/v1/gateways/:id` | Get a single gateway              |
-| `PATCH`  | `/api/v1/gateways/:id` | Update gateway info               |
-| `DELETE` | `/api/v1/gateways/:id` | Soft-delete gateway + revoke MQTT |
+| Method   | Path                               | Description                              |
+| -------- | ---------------------------------- | ---------------------------------------- |
+| `GET`    | `/health`                          | Liveness probe                           |
+| `GET`    | `/api/v1/sites`                    | List all sites                           |
+| `POST`   | `/api/v1/sites`                    | Create a new site                        |
+| `GET`    | `/api/v1/sites/:id`                | Get a single site                        |
+| `PATCH`  | `/api/v1/sites/:id`                | Update site info                         |
+| `DELETE` | `/api/v1/sites/:id`                | Soft-delete site                         |
+| `GET`    | `/api/v1/sites/:id/latest`         | Site-wide real-time snapshot (all zones) |
+| `GET`    | `/api/v1/sites/:id/zones`          | List zones for a site                    |
+| `POST`   | `/api/v1/sites/:id/zones`          | Create a zone                            |
+| `PATCH`  | `/api/v1/sites/:id/zones/:zone_id` | Update zone name / display order         |
+| `DELETE` | `/api/v1/sites/:id/zones/:zone_id` | Soft-delete zone                         |
+| `POST`   | `/api/v1/gateways`                 | Register gateway + provision MQTT        |
+| `GET`    | `/api/v1/gateways`                 | List all gateways                        |
+| `GET`    | `/api/v1/gateways/:id`             | Get a single gateway                     |
+| `PATCH`  | `/api/v1/gateways/:id`             | Update gateway info                      |
+| `DELETE` | `/api/v1/gateways/:id`             | Soft-delete + revoke MQTT credentials    |
+| `GET`    | `/api/v1/devices/:id/latest`       | Latest telemetry for a device (SE/CI/SF) |
+| `GET`    | `/api/v1/devices/:id/history`      | Device telemetry history (`?from=&to=`)  |
+| `GET`    | `/api/v1/assignments/:id/latest`   | Latest sensor reading (ST/SP/SR/SO)      |
+| `GET`    | `/api/v1/assignments/:id/history`  | Sensor history (`?from=&to=`)            |
+
+History endpoints default to the last 24 hours when `from`/`to` are omitted.
 
 ### Build for Production
 
@@ -244,6 +307,17 @@ MQTT_TLS_SERVER_NAME=
 
 # Set to 127.0.0.1 when Nginx runs on the same machine as Orion
 TRUSTED_PROXIES=127.0.0.1
+
+# Legacy source DB (only required for ETL commands)
+SRC_DB_HOST=
+SRC_DB_PORT=3306
+SRC_DB_USER=
+SRC_DB_PASSWORD=
+SRC_DB_NAME=ima_thing
+
+# ETL tuning (stable — put in .env)
+ETL_WORKERS=1
+ETL_BATCH_SLEEP_MS=200
 ```
 
 ---
@@ -251,10 +325,10 @@ TRUSTED_PROXIES=127.0.0.1
 ## Registering a new Edge Device
 
 ```bash
-# Provision MQTT credentials and add to edge-devices group
-MQTT_ADMIN_PASS=<admin_password> ./scripts/mqtt_add_edge.sh <edge_id> <edge_password>
+# Via script (provisions MQTT credentials directly)
+./scripts/mqtt_add_edge.sh <edge_id>
 
-# Or use the API (also provisions MQTT automatically)
+# Via API (also provisions MQTT automatically)
 POST /api/v1/gateways
 ```
 
