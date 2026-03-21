@@ -24,7 +24,11 @@ func main() {
 	// ── 2. Config ────────────────────────────────────────────────────────────
 	config.Init()
 
-	// ── 3. Database ──────────────────────────────────────────────────────────
+	// ── 3. Root context (cancelled on SIGTERM / SIGINT) ───────────────────────
+	rootCtx, rootCancel := context.WithCancel(context.Background())
+	defer rootCancel()
+
+	// ── 4. Database ──────────────────────────────────────────────────────────
 	dbCtx, dbCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer dbCancel()
 
@@ -41,25 +45,14 @@ func main() {
 	}
 	defer dbManager.Close()
 
-	// ── 4. MQTT ──────────────────────────────────────────────────────────────
-	mqttClient, err := service.InitMQTT()
-	if err != nil {
-		slog.Error("Failed to initialise MQTT client", slog.Any("error", err))
-		os.Exit(1)
-	}
-	defer mqttClient.Disconnect(500)
-
-	// ── 5. Wire dependencies ─────────────────────────────────────────────────
+	// ── 5. Wire dependencies (before MQTT so h is ready for the callback) ────
 	//
-	//   repository  ←  dbManager.GormDB
-	//   dynsec      ←  mqttClient
-	//   service     ←  repository + dynsec
-	//   handler     ←  dbManager + mqttClient + service
+	//   repository   ←  dbManager.GormDB / PgxPool
+	//   dynsec       ←  mqttClient  (wired after MQTT init below)
+	//   service      ←  repository
+	//   ingestSvc    ←  dbManager.GormDB + telemetryRepo
+	//   handler      ←  dbManager + mqttClient + services
 	//
-	gatewayRepo := repository.NewGatewayRepository(dbManager.GormDB)
-	dynsec := service.NewDynsecService(mqttClient)
-	gatewaySvc := service.NewGatewayService(gatewayRepo, dynsec)
-
 	telemetryRepo := repository.NewTelemetryRepository(dbManager.PgxPool)
 	telemetrySvc := service.NewTelemetryService(telemetryRepo, dbManager.GormDB)
 
@@ -69,12 +62,39 @@ func main() {
 	zoneRepo := repository.NewZoneRepository(dbManager.GormDB)
 	zoneSvc := service.NewZoneService(zoneRepo, siteRepo)
 
-	h := handler.NewHandler(dbManager, mqttClient, gatewaySvc, telemetrySvc, siteSvc, zoneSvc)
+	ingestSvc := service.NewMQTTIngestService(dbManager.GormDB, telemetryRepo)
+	ingestSvc.Start(rootCtx)
 
-	// Re-subscribe on every (re)connect so subscriptions survive broker restarts.
+	// ── 6. MQTT ──────────────────────────────────────────────────────────────
+	// h is declared here so the onConnect closure can reference it.
+	// It will be assigned after NewHandler() below.
+	var h *handler.Handler
+
+	mqttClient, err := service.InitMQTT(func() {
+		// Called on every (re)connect — restores subscriptions after broker restart.
+		if h != nil {
+			h.SetupMQTTSubscribers()
+		}
+	})
+	if err != nil {
+		slog.Error("Failed to initialise MQTT client", slog.Any("error", err))
+		os.Exit(1)
+	}
+	defer mqttClient.Disconnect(500)
+
+	// ── 7. Finish wiring (services that depend on mqttClient) ────────────────
+	gatewayRepo := repository.NewGatewayRepository(dbManager.GormDB)
+	dynsec := service.NewDynsecService(mqttClient)
+	gatewaySvc := service.NewGatewayService(gatewayRepo, dynsec)
+
+	h = handler.NewHandler(dbManager, mqttClient, gatewaySvc, telemetrySvc, siteSvc, zoneSvc, ingestSvc)
+
+	// SetupMQTTSubscribers is now driven by the OnConnect callback above.
+	// Calling it once here guards against a race where the initial connect
+	// fires before h is assigned (extremely unlikely but safe to have).
 	h.SetupMQTTSubscribers()
 
-	// ── 6. HTTP server ───────────────────────────────────────────────────────
+	// ── 8. HTTP server ───────────────────────────────────────────────────────
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -96,11 +116,13 @@ func main() {
 		}
 	}()
 
-	// ── 7. Graceful shutdown ─────────────────────────────────────────────────
+	// ── 9. Graceful shutdown ─────────────────────────────────────────────────
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-quit
 	slog.Info("Shutdown signal received", slog.String("signal", sig.String()))
+
+	rootCancel()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
@@ -108,6 +130,8 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("HTTP server forced to shut down", slog.Any("error", err))
 	}
+
+	ingestSvc.Stop()
 
 	slog.Info("Orion shut down cleanly")
 }

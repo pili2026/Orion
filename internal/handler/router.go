@@ -21,10 +21,19 @@ type Handler struct {
 	TelemetrySvc TelemetryService
 	SiteSvc      SiteService
 	ZoneSvc      ZoneService
+	IngestSvc    MQTTIngestService
 }
 
 // NewHandler creates a new Handler with the provided dependencies.
-func NewHandler(db *database.DBManager, mqttClient mqtt.Client, gatewaySvc GatewayService, telemetrySvc TelemetryService, siteSvc SiteService, zoneSvc ZoneService) *Handler {
+func NewHandler(
+	db *database.DBManager,
+	mqttClient mqtt.Client,
+	gatewaySvc GatewayService,
+	telemetrySvc TelemetryService,
+	siteSvc SiteService,
+	zoneSvc ZoneService,
+	ingestSvc MQTTIngestService,
+) *Handler {
 	return &Handler{
 		DB:           db,
 		MQTT:         mqttClient,
@@ -32,6 +41,7 @@ func NewHandler(db *database.DBManager, mqttClient mqtt.Client, gatewaySvc Gatew
 		TelemetrySvc: telemetrySvc,
 		SiteSvc:      siteSvc,
 		ZoneSvc:      zoneSvc,
+		IngestSvc:    ingestSvc,
 	}
 }
 

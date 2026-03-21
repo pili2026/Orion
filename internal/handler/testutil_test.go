@@ -37,6 +37,19 @@ func (m *mockMQTTClient) Publish(topic string, _ byte, _ bool, payload interface
 
 func (m *mockMQTTClient) AddRoute(_ string, _ mqtt.MessageHandler) {}
 
+// ── MQTTIngestService mock ────────────────────────────────────────────────────
+
+type mockMQTTIngestService struct {
+	ProcessTelemetryFn func(ctx context.Context, mqttUsername string, payload []byte) error
+}
+
+func (m *mockMQTTIngestService) ProcessTelemetry(ctx context.Context, mqttUsername string, payload []byte) error {
+	if m.ProcessTelemetryFn != nil {
+		return m.ProcessTelemetryFn(ctx, mqttUsername, payload)
+	}
+	return nil
+}
+
 // ── GatewayService mock ───────────────────────────────────────────────────────
 
 type mockGatewayService struct {
@@ -141,13 +154,16 @@ func (m *mockZoneService) Delete(ctx context.Context, siteID, zoneID uuid.UUID) 
 
 // newTestHandler wires all mocks and returns each for per-test overriding.
 // nil DBManager is acceptable for handler-level tests that don't hit the DB.
+// The MQTTIngestService mock is wired internally — existing tests do not need
+// to control ingest behaviour so it is not exposed as a return value.
 func newTestHandler() (*Handler, *mockMQTTClient, *mockGatewayService, *mockTelemetryService, *mockSiteService, *mockZoneService) {
 	mqttMock := &mockMQTTClient{}
 	gatewaySvc := &mockGatewayService{}
 	telemetrySvc := &mockTelemetryService{}
 	siteSvc := &mockSiteService{}
 	zoneSvc := &mockZoneService{}
+	ingestSvc := &mockMQTTIngestService{}
 
-	h := NewHandler(nil, mqttMock, gatewaySvc, telemetrySvc, siteSvc, zoneSvc)
+	h := NewHandler(nil, mqttMock, gatewaySvc, telemetrySvc, siteSvc, zoneSvc, ingestSvc)
 	return h, mqttMock, gatewaySvc, telemetrySvc, siteSvc, zoneSvc
 }

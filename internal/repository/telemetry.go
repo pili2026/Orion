@@ -35,6 +35,9 @@ type MeterRow struct {
 	Status   *string
 }
 
+// InverterRow maps to telemetry_inverters.
+// Error and Alert are *int (migration 004 converted the columns from TEXT to INTEGER).
+// -1 is normalised to nil before storage; 0 means "no error / normal state".
 type InverterRow struct {
 	TS        time.Time
 	DeviceID  uuid.UUID
@@ -43,8 +46,8 @@ type InverterRow struct {
 	KW        *float64
 	KWH       *float64
 	HZ        *float64
-	Error     *string
-	Alert     *string
+	Error     *int // NULL = no error code (was -1 in legacy data)
+	Alert     *int // NULL = no alert code
 	InvStatus *string
 	Status    *string
 }
@@ -69,13 +72,15 @@ type SensorRow struct {
 // ── Interface ─────────────────────────────────────────────────────────────────
 
 type TelemetryRepository interface {
+	// ── Read path (HTTP API) ─────────────────────────────────────────────────
+
 	// Single-entity latest
 	LatestMeter(ctx context.Context, deviceID uuid.UUID) (*MeterRow, error)
 	LatestInverter(ctx context.Context, deviceID uuid.UUID) (*InverterRow, error)
 	LatestFlowMeter(ctx context.Context, deviceID uuid.UUID) (*FlowMeterRow, error)
 	LatestSensor(ctx context.Context, assignmentID uuid.UUID) (*SensorRow, error)
 
-	// Bulk latest (DISTINCT ON) — used by site-wide API
+	// Bulk latest (DISTINCT ON) — used by site-wide snapshot API
 	LatestMetersByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]MeterRow, error)
 	LatestInvertersByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]InverterRow, error)
 	LatestFlowMetersByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]FlowMeterRow, error)
@@ -86,6 +91,16 @@ type TelemetryRepository interface {
 	InverterHistory(ctx context.Context, deviceID uuid.UUID, from, to time.Time) ([]InverterRow, error)
 	FlowMeterHistory(ctx context.Context, deviceID uuid.UUID, from, to time.Time) ([]FlowMeterRow, error)
 	SensorHistory(ctx context.Context, assignmentID uuid.UUID, from, to time.Time) ([]SensorRow, error)
+
+	// ── Write path (MQTT ingest) ─────────────────────────────────────────────
+
+	// receivedAt is the Orion-side wall-clock time (time.Now() at MQTT receipt).
+	// It is stored in the received_at column alongside ts (device-side time)
+	// so that network latency and device clock drift can be monitored.
+	InsertMeter(ctx context.Context, row MeterRow, receivedAt time.Time) error
+	InsertInverter(ctx context.Context, row InverterRow, receivedAt time.Time) error
+	InsertFlowMeter(ctx context.Context, row FlowMeterRow, receivedAt time.Time) error
+	InsertSensor(ctx context.Context, row SensorRow, receivedAt time.Time) error
 }
 
 type telemetryRepository struct {
@@ -107,11 +122,13 @@ func (r *telemetryRepository) LatestMeter(ctx context.Context, deviceID uuid.UUI
 		ORDER BY ts DESC LIMIT 1
 	`, deviceID)
 	var m MeterRow
-	err := row.Scan(&m.TS, &m.DeviceID,
+	err := row.Scan(
+		&m.TS, &m.DeviceID,
 		&m.Voltage, &m.Current, &m.KW, &m.KVA, &m.KVAR,
 		&m.KWH, &m.KVAH, &m.KVARH,
 		&m.CurrentA, &m.CurrentB, &m.CurrentC,
-		&m.PF, &m.Status)
+		&m.PF, &m.Status,
+	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNoData
 	}
@@ -130,9 +147,11 @@ func (r *telemetryRepository) LatestInverter(ctx context.Context, deviceID uuid.
 		ORDER BY ts DESC LIMIT 1
 	`, deviceID)
 	var m InverterRow
-	err := row.Scan(&m.TS, &m.DeviceID,
+	err := row.Scan(
+		&m.TS, &m.DeviceID,
 		&m.Voltage, &m.Current, &m.KW, &m.KWH,
-		&m.HZ, &m.Error, &m.Alert, &m.InvStatus, &m.Status)
+		&m.HZ, &m.Error, &m.Alert, &m.InvStatus, &m.Status,
+	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNoData
 	}
@@ -150,8 +169,10 @@ func (r *telemetryRepository) LatestFlowMeter(ctx context.Context, deviceID uuid
 		ORDER BY ts DESC LIMIT 1
 	`, deviceID)
 	var m FlowMeterRow
-	err := row.Scan(&m.TS, &m.DeviceID,
-		&m.Flow, &m.Consumption, &m.RevConsumption, &m.Direction, &m.Status)
+	err := row.Scan(
+		&m.TS, &m.DeviceID,
+		&m.Flow, &m.Consumption, &m.RevConsumption, &m.Direction, &m.Status,
+	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNoData
 	}
@@ -183,7 +204,7 @@ func (r *telemetryRepository) LatestSensor(ctx context.Context, assignmentID uui
 
 func (r *telemetryRepository) LatestMetersByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]MeterRow, error) {
 	if len(ids) == 0 {
-		return map[uuid.UUID]MeterRow{}, nil
+		return nil, nil
 	}
 	rows, err := r.pool.Query(ctx, `
 		SELECT DISTINCT ON (device_id)
@@ -194,18 +215,20 @@ func (r *telemetryRepository) LatestMetersByIDs(ctx context.Context, ids []uuid.
 		ORDER BY device_id, ts DESC
 	`, ids)
 	if err != nil {
-		return nil, fmt.Errorf("bulk latest meters: %w", err)
+		return nil, fmt.Errorf("latest meters by ids: %w", err)
 	}
 	defer rows.Close()
 
 	result := make(map[uuid.UUID]MeterRow, len(ids))
 	for rows.Next() {
 		var m MeterRow
-		if err := rows.Scan(&m.TS, &m.DeviceID,
+		if err := rows.Scan(
+			&m.TS, &m.DeviceID,
 			&m.Voltage, &m.Current, &m.KW, &m.KVA, &m.KVAR,
 			&m.KWH, &m.KVAH, &m.KVARH,
 			&m.CurrentA, &m.CurrentB, &m.CurrentC,
-			&m.PF, &m.Status); err != nil {
+			&m.PF, &m.Status,
+		); err != nil {
 			return nil, fmt.Errorf("scan meter row: %w", err)
 		}
 		result[m.DeviceID] = m
@@ -215,7 +238,7 @@ func (r *telemetryRepository) LatestMetersByIDs(ctx context.Context, ids []uuid.
 
 func (r *telemetryRepository) LatestInvertersByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]InverterRow, error) {
 	if len(ids) == 0 {
-		return map[uuid.UUID]InverterRow{}, nil
+		return nil, nil
 	}
 	rows, err := r.pool.Query(ctx, `
 		SELECT DISTINCT ON (device_id)
@@ -226,16 +249,18 @@ func (r *telemetryRepository) LatestInvertersByIDs(ctx context.Context, ids []uu
 		ORDER BY device_id, ts DESC
 	`, ids)
 	if err != nil {
-		return nil, fmt.Errorf("bulk latest inverters: %w", err)
+		return nil, fmt.Errorf("latest inverters by ids: %w", err)
 	}
 	defer rows.Close()
 
 	result := make(map[uuid.UUID]InverterRow, len(ids))
 	for rows.Next() {
 		var m InverterRow
-		if err := rows.Scan(&m.TS, &m.DeviceID,
+		if err := rows.Scan(
+			&m.TS, &m.DeviceID,
 			&m.Voltage, &m.Current, &m.KW, &m.KWH,
-			&m.HZ, &m.Error, &m.Alert, &m.InvStatus, &m.Status); err != nil {
+			&m.HZ, &m.Error, &m.Alert, &m.InvStatus, &m.Status,
+		); err != nil {
 			return nil, fmt.Errorf("scan inverter row: %w", err)
 		}
 		result[m.DeviceID] = m
@@ -245,7 +270,7 @@ func (r *telemetryRepository) LatestInvertersByIDs(ctx context.Context, ids []uu
 
 func (r *telemetryRepository) LatestFlowMetersByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]FlowMeterRow, error) {
 	if len(ids) == 0 {
-		return map[uuid.UUID]FlowMeterRow{}, nil
+		return nil, nil
 	}
 	rows, err := r.pool.Query(ctx, `
 		SELECT DISTINCT ON (device_id)
@@ -255,15 +280,17 @@ func (r *telemetryRepository) LatestFlowMetersByIDs(ctx context.Context, ids []u
 		ORDER BY device_id, ts DESC
 	`, ids)
 	if err != nil {
-		return nil, fmt.Errorf("bulk latest flow meters: %w", err)
+		return nil, fmt.Errorf("latest flow meters by ids: %w", err)
 	}
 	defer rows.Close()
 
 	result := make(map[uuid.UUID]FlowMeterRow, len(ids))
 	for rows.Next() {
 		var m FlowMeterRow
-		if err := rows.Scan(&m.TS, &m.DeviceID,
-			&m.Flow, &m.Consumption, &m.RevConsumption, &m.Direction, &m.Status); err != nil {
+		if err := rows.Scan(
+			&m.TS, &m.DeviceID,
+			&m.Flow, &m.Consumption, &m.RevConsumption, &m.Direction, &m.Status,
+		); err != nil {
 			return nil, fmt.Errorf("scan flow meter row: %w", err)
 		}
 		result[m.DeviceID] = m
@@ -273,7 +300,7 @@ func (r *telemetryRepository) LatestFlowMetersByIDs(ctx context.Context, ids []u
 
 func (r *telemetryRepository) LatestSensorsByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]SensorRow, error) {
 	if len(ids) == 0 {
-		return map[uuid.UUID]SensorRow{}, nil
+		return nil, nil
 	}
 	rows, err := r.pool.Query(ctx, `
 		SELECT DISTINCT ON (assignment_id)
@@ -283,7 +310,7 @@ func (r *telemetryRepository) LatestSensorsByIDs(ctx context.Context, ids []uuid
 		ORDER BY assignment_id, ts DESC
 	`, ids)
 	if err != nil {
-		return nil, fmt.Errorf("bulk latest sensors: %w", err)
+		return nil, fmt.Errorf("latest sensors by ids: %w", err)
 	}
 	defer rows.Close()
 
@@ -314,11 +341,13 @@ func (r *telemetryRepository) MeterHistory(ctx context.Context, deviceID uuid.UU
 	defer rows.Close()
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (MeterRow, error) {
 		var m MeterRow
-		err := row.Scan(&m.TS, &m.DeviceID,
+		err := row.Scan(
+			&m.TS, &m.DeviceID,
 			&m.Voltage, &m.Current, &m.KW, &m.KVA, &m.KVAR,
 			&m.KWH, &m.KVAH, &m.KVARH,
 			&m.CurrentA, &m.CurrentB, &m.CurrentC,
-			&m.PF, &m.Status)
+			&m.PF, &m.Status,
+		)
 		return m, err
 	})
 }
@@ -337,9 +366,11 @@ func (r *telemetryRepository) InverterHistory(ctx context.Context, deviceID uuid
 	defer rows.Close()
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (InverterRow, error) {
 		var m InverterRow
-		err := row.Scan(&m.TS, &m.DeviceID,
+		err := row.Scan(
+			&m.TS, &m.DeviceID,
 			&m.Voltage, &m.Current, &m.KW, &m.KWH,
-			&m.HZ, &m.Error, &m.Alert, &m.InvStatus, &m.Status)
+			&m.HZ, &m.Error, &m.Alert, &m.InvStatus, &m.Status,
+		)
 		return m, err
 	})
 }
@@ -357,8 +388,10 @@ func (r *telemetryRepository) FlowMeterHistory(ctx context.Context, deviceID uui
 	defer rows.Close()
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (FlowMeterRow, error) {
 		var m FlowMeterRow
-		err := row.Scan(&m.TS, &m.DeviceID,
-			&m.Flow, &m.Consumption, &m.RevConsumption, &m.Direction, &m.Status)
+		err := row.Scan(
+			&m.TS, &m.DeviceID,
+			&m.Flow, &m.Consumption, &m.RevConsumption, &m.Direction, &m.Status,
+		)
 		return m, err
 	})
 }
@@ -379,4 +412,75 @@ func (r *telemetryRepository) SensorHistory(ctx context.Context, assignmentID uu
 		err := row.Scan(&m.TS, &m.AssignmentID, &m.Val, &m.Status)
 		return m, err
 	})
+}
+
+// ── Write path (MQTT ingest) ──────────────────────────────────────────────────
+
+func (r *telemetryRepository) InsertMeter(ctx context.Context, row MeterRow, receivedAt time.Time) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO telemetry_meters
+		    (ts, device_id, voltage, current, kw, kva, kvar,
+		     kwh, kvah, kvarh, current_a, current_b, current_c, pf, status, received_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+	`,
+		row.TS, row.DeviceID,
+		row.Voltage, row.Current, row.KW, row.KVA, row.KVAR,
+		row.KWH, row.KVAH, row.KVARH,
+		row.CurrentA, row.CurrentB, row.CurrentC,
+		row.PF, row.Status,
+		receivedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("insert meter: %w", err)
+	}
+	return nil
+}
+
+func (r *telemetryRepository) InsertInverter(ctx context.Context, row InverterRow, receivedAt time.Time) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO telemetry_inverters
+		    (ts, device_id, voltage, current, kw, kwh,
+		     hz, error, alert, invstatus, status, received_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+	`,
+		row.TS, row.DeviceID,
+		row.Voltage, row.Current, row.KW, row.KWH,
+		row.HZ, row.Error, row.Alert, row.InvStatus, row.Status,
+		receivedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("insert inverter: %w", err)
+	}
+	return nil
+}
+
+func (r *telemetryRepository) InsertFlowMeter(ctx context.Context, row FlowMeterRow, receivedAt time.Time) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO telemetry_flow_meters
+		    (ts, device_id, flow, consumption, revconsumption, direction, status, received_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+	`,
+		row.TS, row.DeviceID,
+		row.Flow, row.Consumption, row.RevConsumption, row.Direction, row.Status,
+		receivedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("insert flow meter: %w", err)
+	}
+	return nil
+}
+
+func (r *telemetryRepository) InsertSensor(ctx context.Context, row SensorRow, receivedAt time.Time) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO telemetry_sensors
+		    (ts, assignment_id, val, status, received_at)
+		VALUES ($1,$2,$3,$4,$5)
+	`,
+		row.TS, row.AssignmentID, row.Val, row.Status,
+		receivedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("insert sensor: %w", err)
+	}
+	return nil
 }

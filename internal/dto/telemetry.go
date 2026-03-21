@@ -49,6 +49,9 @@ type LatestMeterResponse struct {
 	Status   *string   `json:"status"`
 }
 
+// LatestInverterResponse is the API response for inverter (CI) telemetry.
+// Error and Alert are integer status codes from the inverter register.
+// NULL means no code is present (device returned -1 or no data).
 type LatestInverterResponse struct {
 	DeviceInfo
 	TS        time.Time `json:"ts"`
@@ -57,8 +60,8 @@ type LatestInverterResponse struct {
 	KW        *float64  `json:"kw"`
 	KWH       *float64  `json:"kwh"`
 	HZ        *float64  `json:"hz"`
-	Error     *string   `json:"error"`
-	Alert     *string   `json:"alert"`
+	Error     *int      `json:"error"`
+	Alert     *int      `json:"alert"`
 	InvStatus *string   `json:"invstatus"`
 	Status    *string   `json:"status"`
 }
@@ -136,14 +139,16 @@ type MeterData struct {
 	Status   *string  `json:"status"`
 }
 
+// InverterData mirrors LatestInverterResponse.Data for the site-wide snapshot.
+// Error and Alert are integers (NULL = no code).
 type InverterData struct {
 	Voltage   *float64 `json:"voltage"`
 	Current   *float64 `json:"current"`
 	KW        *float64 `json:"kw"`
 	KWH       *float64 `json:"kwh"`
 	HZ        *float64 `json:"hz"`
-	Error     *string  `json:"error"`
-	Alert     *string  `json:"alert"`
+	Error     *int     `json:"error"`
+	Alert     *int     `json:"alert"`
 	InvStatus *string  `json:"invstatus"`
 	Status    *string  `json:"status"`
 }

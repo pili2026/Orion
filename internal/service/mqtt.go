@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"log/slog"
 	"os"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -15,15 +16,6 @@ import (
 // ServerName precedence:
 //  1. MQTT_TLS_SERVER_NAME  — explicit override (use when broker hostname differs from cert CN/SAN)
 //  2. MQTT_BROKER           — fallback (works when both are the same, e.g. production)
-//
-// Local dev example:
-//
-//	MQTT_BROKER=localhost
-//	MQTT_TLS_SERVER_NAME=mqtt.eversource-ai.com
-//
-// Production example (same value, no override needed):
-//
-//	MQTT_BROKER=mqtt.eversource-ai.com
 func createTLSConfig(caCertPath string) (*tls.Config, error) {
 	ca, err := os.ReadFile(caCertPath)
 	if err != nil {
@@ -47,9 +39,16 @@ func createTLSConfig(caCertPath string) (*tls.Config, error) {
 }
 
 // InitMQTT initialises and connects the MQTT client.
-// Returns an error instead of calling log.Fatalf so the caller (main.go)
-// owns the shutdown decision and deferred cleanups still run.
-func InitMQTT() (mqtt.Client, error) {
+//
+// onConnect is called every time the client successfully connects or reconnects
+// to the broker — including the initial connection and any automatic reconnects.
+// This ensures MQTT subscriptions are always restored after a broker restart or
+// network interruption (Paho's AutoReconnect restores the TCP connection but
+// does NOT restore subscriptions when CleanSession=false and the broker has no
+// stored session for this client).
+//
+// Pass nil if no post-connect callback is needed.
+func InitMQTT(onConnect func()) (mqtt.Client, error) {
 	broker := os.Getenv("MQTT_BROKER")
 	port := os.Getenv("MQTT_PORT")
 	if broker == "" || port == "" {
@@ -73,8 +72,18 @@ func InitMQTT() (mqtt.Client, error) {
 		opts.SetTLSConfig(tlsCfg)
 	}
 
+	// OnConnect is triggered on every successful (re)connection.
+	// Subscriptions must be re-registered here because Paho does not
+	// restore them automatically after a reconnect.
+	opts.SetOnConnectHandler(func(_ mqtt.Client) {
+		slog.Info("MQTT connected")
+		if onConnect != nil {
+			onConnect()
+		}
+	})
+
 	opts.SetConnectionLostHandler(func(_ mqtt.Client, err error) {
-		fmt.Printf("MQTT connection lost: %v\n", err)
+		slog.Warn("MQTT connection lost", slog.Any("error", err))
 	})
 
 	client := mqtt.NewClient(opts)

@@ -3,9 +3,10 @@
 //
 // Usage:
 //
-//	go run cmd/migrate/main.go up      # apply all pending migrations
-//	go run cmd/migrate/main.go down    # roll back the last migration
-//	go run cmd/migrate/main.go version # show current migration version
+//	go run cmd/migrate/main.go up           # apply all pending migrations
+//	go run cmd/migrate/main.go down         # roll back the last migration
+//	go run cmd/migrate/main.go version      # show current migration version
+//	go run cmd/migrate/main.go force <ver>  # force-set version (fix dirty state)
 package main
 
 import (
@@ -13,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -27,7 +29,7 @@ func main() {
 	}
 
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run cmd/migrate/main.go [up|down|version]")
+		fmt.Println("Usage: go run cmd/migrate/main.go [up|down|version|force <version>]")
 		os.Exit(1)
 	}
 
@@ -78,8 +80,24 @@ func main() {
 			slog.Bool("dirty", dirty),
 		)
 
+	case "force":
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: go run cmd/migrate/main.go force <version>")
+			os.Exit(1)
+		}
+		v, err := strconv.Atoi(os.Args[2])
+		if err != nil {
+			slog.Error("Invalid version number", slog.String("input", os.Args[2]))
+			os.Exit(1)
+		}
+		if err := m.Force(v); err != nil {
+			slog.Error("Force version failed", slog.Any("error", err))
+			os.Exit(1)
+		}
+		slog.Info("Forced migration version", slog.Int("version", v))
+
 	default:
-		fmt.Printf("Unknown command %q — use up, down, or version\n", command)
+		fmt.Printf("Unknown command %q — use up, down, version, or force <version>\n", command)
 		os.Exit(1)
 	}
 }
