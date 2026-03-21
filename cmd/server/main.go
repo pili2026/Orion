@@ -87,7 +87,10 @@ func main() {
 	dynsec := service.NewDynsecService(mqttClient)
 	gatewaySvc := service.NewGatewayService(gatewayRepo, dynsec)
 
-	h = handler.NewHandler(dbManager, mqttClient, gatewaySvc, telemetrySvc, siteSvc, zoneSvc, ingestSvc)
+	deviceRepo := repository.NewDeviceRepository(dbManager.GormDB)
+	deviceSvc := service.NewDeviceService(deviceRepo)
+
+	h = handler.NewHandler(dbManager, mqttClient, gatewaySvc, telemetrySvc, siteSvc, zoneSvc, ingestSvc, deviceSvc)
 
 	// SetupMQTTSubscribers is now driven by the OnConnect callback above.
 	// Calling it once here guards against a race where the initial connect

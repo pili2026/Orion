@@ -43,6 +43,7 @@ func (s *telemetryService) LatestByDevice(ctx context.Context, deviceID uuid.UUI
 		DeviceID:       dev.ID,
 		DeviceTypeCode: dev.DeviceTypeCode,
 		FuncTag:        dev.FuncTag,
+		DisplayName:    dev.DisplayName,
 		DeviceCode:     dev.DeviceCode,
 		Zone: dto.ZoneBrief{
 			ID:       dev.Zone.ID,
@@ -197,6 +198,7 @@ func (s *telemetryService) LatestBySite(ctx context.Context, siteID uuid.UUID) (
 				DeviceID:       dev.ID,
 				DeviceTypeCode: dev.DeviceTypeCode,
 				FuncTag:        dev.FuncTag,
+				DisplayName:    dev.DisplayName,
 				DeviceCode:     dev.DeviceCode,
 			}
 

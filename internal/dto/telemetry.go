@@ -24,6 +24,7 @@ type DeviceInfo struct {
 	DeviceID       uuid.UUID `json:"device_id"`
 	DeviceTypeCode string    `json:"device_type_code"`
 	FuncTag        string    `json:"func_tag"`
+	DisplayName    *string   `json:"display_name"`
 	DeviceCode     string    `json:"device_code"`
 	Zone           ZoneBrief `json:"zone"`
 	Site           SiteBrief `json:"site"`
@@ -87,10 +88,12 @@ type LatestSensorResponse struct {
 
 // DeviceLatestEntry is one device row inside SiteLatestResponse.
 // TS and Data are nil when no telemetry exists for this device yet.
+// DisplayName is nil when not set; front-end should fall back to FuncTag.
 type DeviceLatestEntry struct {
 	DeviceID       uuid.UUID  `json:"device_id"`
 	DeviceTypeCode string     `json:"device_type_code"`
 	FuncTag        string     `json:"func_tag"`
+	DisplayName    *string    `json:"display_name"`
 	DeviceCode     string     `json:"device_code"`
 	TS             *time.Time `json:"ts"`
 	Data           any        `json:"data"`

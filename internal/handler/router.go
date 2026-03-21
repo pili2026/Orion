@@ -22,6 +22,7 @@ type Handler struct {
 	SiteSvc      SiteService
 	ZoneSvc      ZoneService
 	IngestSvc    MQTTIngestService
+	DeviceSvc    DeviceService
 }
 
 // NewHandler creates a new Handler with the provided dependencies.
@@ -33,6 +34,7 @@ func NewHandler(
 	siteSvc SiteService,
 	zoneSvc ZoneService,
 	ingestSvc MQTTIngestService,
+	deviceSvc DeviceService,
 ) *Handler {
 	return &Handler{
 		DB:           db,
@@ -42,6 +44,7 @@ func NewHandler(
 		SiteSvc:      siteSvc,
 		ZoneSvc:      zoneSvc,
 		IngestSvc:    ingestSvc,
+		DeviceSvc:    deviceSvc,
 	}
 }
 
@@ -86,6 +89,7 @@ func (h *Handler) SetupRouter() *gin.Engine {
 		// Telemetry — device-level (SE, CI, SF)
 		devices := v1.Group("/devices")
 		{
+			devices.PATCH("/:id", h.UpdateDevice)
 			devices.GET("/:id/latest", h.LatestByDevice)
 			devices.GET("/:id/history", h.HistoryByDevice)
 		}

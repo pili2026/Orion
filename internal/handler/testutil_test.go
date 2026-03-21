@@ -150,6 +150,16 @@ func (m *mockZoneService) Delete(ctx context.Context, siteID, zoneID uuid.UUID) 
 	return m.DeleteFn(ctx, siteID, zoneID)
 }
 
+// ── DeviceService mock ────────────────────────────────────────────────────────
+
+type mockDeviceService struct {
+	UpdateFn func(ctx context.Context, id uuid.UUID, req dto.UpdateDeviceRequest) (*dto.DeviceResponse, error)
+}
+
+func (m *mockDeviceService) Update(ctx context.Context, id uuid.UUID, req dto.UpdateDeviceRequest) (*dto.DeviceResponse, error) {
+	return m.UpdateFn(ctx, id, req)
+}
+
 // ── Test helper ───────────────────────────────────────────────────────────────
 
 // newTestHandler wires all mocks and returns each for per-test overriding.
@@ -163,7 +173,8 @@ func newTestHandler() (*Handler, *mockMQTTClient, *mockGatewayService, *mockTele
 	siteSvc := &mockSiteService{}
 	zoneSvc := &mockZoneService{}
 	ingestSvc := &mockMQTTIngestService{}
+	deviceSvc := &mockDeviceService{}
 
-	h := NewHandler(nil, mqttMock, gatewaySvc, telemetrySvc, siteSvc, zoneSvc, ingestSvc)
+	h := NewHandler(nil, mqttMock, gatewaySvc, telemetrySvc, siteSvc, zoneSvc, ingestSvc, deviceSvc)
 	return h, mqttMock, gatewaySvc, telemetrySvc, siteSvc, zoneSvc
 }
