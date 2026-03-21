@@ -525,25 +525,31 @@ func colFloat(m map[string]any, key string) *float64 {
 	return nil
 }
 
+// sanitizeString removes characters that PostgreSQL UTF-8 rejects,
+// most notably null bytes (0x00) that MariaDB permits in string columns.
+func sanitizeString(s string) string {
+	return strings.ReplaceAll(s, "\x00", "")
+}
+
 func colString(m map[string]any, key string) *string {
 	v, ok := m[key]
 	if !ok || v == nil {
 		return nil
 	}
+	var s string
 	switch val := v.(type) {
 	case string:
-		if val == "" {
-			return nil
-		}
-		return &val
+		s = val
 	case []byte:
-		s := strings.TrimSpace(string(val))
-		if s == "" {
-			return nil
-		}
-		return &s
+		s = strings.TrimSpace(string(val))
+	default:
+		return nil
 	}
-	return nil
+	s = sanitizeString(s)
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 // isTableNotFound checks whether the error indicates a missing table in MySQL.
