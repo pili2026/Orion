@@ -24,6 +24,7 @@ type Device struct {
 	ZoneID         uuid.UUID `gorm:"type:uuid;index"                    json:"zone_id"`
 	DeviceTypeCode string    `gorm:"type:varchar(50);not null;index"    json:"device_type_code"`
 	FuncTag        string    `gorm:"type:varchar(100)"                  json:"func_tag"`
+	DisplayName    *string   `gorm:"type:varchar(100)"                  json:"display_name"`
 	DeviceCode     string    `gorm:"type:varchar(100);not null"         json:"device_code"`
 
 	// Relationships
