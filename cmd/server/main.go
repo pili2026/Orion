@@ -13,6 +13,7 @@ import (
 	"github.com/hill/orion/internal/config"
 	"github.com/hill/orion/internal/database"
 	"github.com/hill/orion/internal/handler"
+	"github.com/hill/orion/internal/middleware"
 	"github.com/hill/orion/internal/repository"
 	"github.com/hill/orion/internal/service"
 )
@@ -90,7 +91,8 @@ func main() {
 	deviceRepo := repository.NewDeviceRepository(dbManager.GormDB)
 	deviceSvc := service.NewDeviceService(deviceRepo)
 
-	h = handler.NewHandler(dbManager, mqttClient, gatewaySvc, telemetrySvc, siteSvc, zoneSvc, ingestSvc, deviceSvc)
+	authn := middleware.NewStubAuthenticator()
+	h = handler.NewHandler(dbManager, mqttClient, gatewaySvc, telemetrySvc, siteSvc, zoneSvc, ingestSvc, deviceSvc, authn)
 
 	// SetupMQTTSubscribers is now driven by the OnConnect callback above.
 	// Calling it once here guards against a race where the initial connect

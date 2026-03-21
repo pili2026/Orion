@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/hill/orion/internal/database"
+	"github.com/hill/orion/internal/middleware"
 )
 
 // Handler holds every dependency that HTTP and MQTT handlers need.
@@ -23,6 +24,7 @@ type Handler struct {
 	ZoneSvc      ZoneService
 	IngestSvc    MQTTIngestService
 	DeviceSvc    DeviceService
+	Authn        middleware.Authenticator
 }
 
 // NewHandler creates a new Handler with the provided dependencies.
@@ -35,6 +37,7 @@ func NewHandler(
 	zoneSvc ZoneService,
 	ingestSvc MQTTIngestService,
 	deviceSvc DeviceService,
+	authn middleware.Authenticator,
 ) *Handler {
 	return &Handler{
 		DB:           db,
@@ -45,6 +48,7 @@ func NewHandler(
 		ZoneSvc:      zoneSvc,
 		IngestSvc:    ingestSvc,
 		DeviceSvc:    deviceSvc,
+		Authn:        authn,
 	}
 }
 
@@ -73,17 +77,15 @@ func (h *Handler) SetupRouter() *gin.Engine {
 	r.GET("/health", h.healthCheck)
 
 	// ── API v1 ───────────────────────────────────────────────────────────────
-	// Add auth middleware here once implemented:
-	//   v1 := r.Group("/api/v1", middleware.Auth())
-	v1 := r.Group("/api/v1")
+	v1 := r.Group("/api/v1", middleware.Auth(h.Authn))
 	{
 		gateways := v1.Group("/gateways")
 		{
-			gateways.POST("", h.RegisterGateway)
+			gateways.POST("", middleware.RequirePermission(middleware.PermGatewayWrite), h.RegisterGateway)
 			gateways.GET("", h.ListGateways)
 			gateways.GET("/:id", h.GetGateway)
-			gateways.PATCH("/:id", h.UpdateGateway)
-			gateways.DELETE("/:id", h.DeleteGateway)
+			gateways.PATCH("/:id", middleware.RequirePermission(middleware.PermGatewayWrite), h.UpdateGateway)
+			gateways.DELETE("/:id", middleware.RequirePermission(middleware.PermGatewayDelete), h.DeleteGateway)
 		}
 
 		// Telemetry — device-level (SE, CI, SF)
@@ -105,17 +107,17 @@ func (h *Handler) SetupRouter() *gin.Engine {
 		sites := v1.Group("/sites")
 		{
 			sites.GET("", h.ListSites)
-			sites.POST("", h.CreateSite)
+			sites.POST("", middleware.RequirePermission(middleware.PermSiteWrite), h.CreateSite)
 			sites.GET("/:id", h.GetSite)
-			sites.PATCH("/:id", h.UpdateSite)
-			sites.DELETE("/:id", h.DeleteSite)
+			sites.PATCH("/:id", middleware.RequirePermission(middleware.PermSiteWrite), h.UpdateSite)
+			sites.DELETE("/:id", middleware.RequirePermission(middleware.PermSiteDelete), h.DeleteSite)
 			sites.GET("/:id/latest", h.LatestBySite)
 
 			// Zones (nested under site)
 			sites.GET("/:id/zones", h.ListZones)
-			sites.POST("/:id/zones", h.CreateZone)
-			sites.PATCH("/:id/zones/:zone_id", h.UpdateZone)
-			sites.DELETE("/:id/zones/:zone_id", h.DeleteZone)
+			sites.POST("/:id/zones", middleware.RequirePermission(middleware.PermSiteWrite), h.CreateZone)
+			sites.PATCH("/:id/zones/:zone_id", middleware.RequirePermission(middleware.PermSiteWrite), h.UpdateZone)
+			sites.DELETE("/:id/zones/:zone_id", middleware.RequirePermission(middleware.PermSiteDelete), h.DeleteZone)
 		}
 	}
 

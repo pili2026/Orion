@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hill/orion/internal/dto"
+	"github.com/hill/orion/internal/middleware"
 )
 
 // ── MQTT mock ─────────────────────────────────────────────────────────────────
@@ -166,6 +167,8 @@ func (m *mockDeviceService) Update(ctx context.Context, id uuid.UUID, req dto.Up
 // nil DBManager is acceptable for handler-level tests that don't hit the DB.
 // The MQTTIngestService mock is wired internally — existing tests do not need
 // to control ingest behaviour so it is not exposed as a return value.
+// StubAuthenticator is used so that router-level auth tests work out of the
+// box; individual handler tests call handler methods directly and bypass auth.
 func newTestHandler() (*Handler, *mockMQTTClient, *mockGatewayService, *mockTelemetryService, *mockSiteService, *mockZoneService) {
 	mqttMock := &mockMQTTClient{}
 	gatewaySvc := &mockGatewayService{}
@@ -174,7 +177,8 @@ func newTestHandler() (*Handler, *mockMQTTClient, *mockGatewayService, *mockTele
 	zoneSvc := &mockZoneService{}
 	ingestSvc := &mockMQTTIngestService{}
 	deviceSvc := &mockDeviceService{}
+	authn := middleware.NewStubAuthenticator()
 
-	h := NewHandler(nil, mqttMock, gatewaySvc, telemetrySvc, siteSvc, zoneSvc, ingestSvc, deviceSvc)
+	h := NewHandler(nil, mqttMock, gatewaySvc, telemetrySvc, siteSvc, zoneSvc, ingestSvc, deviceSvc, authn)
 	return h, mqttMock, gatewaySvc, telemetrySvc, siteSvc, zoneSvc
 }
