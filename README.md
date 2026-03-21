@@ -179,6 +179,9 @@ go run cmd/migrate/main.go down
 
 # Show current migration version
 go run cmd/migrate/main.go version
+
+# Update the schema_migrations record.
+go run cmd/migrate/main.go force {version}
 ```
 
 > **Never edit an existing migration file that has already been applied.**
@@ -212,7 +215,7 @@ Supports checkpoint/resume — interrupted runs pick up where they left off.
 go run cmd/etl-telemetry/main.go
 
 # Specify a date range
-ETL_FROM=2024-01-01 ETL_TO=2024-06-30 go run cmd/etl-telemetry/main.go
+ETL_FROM=2026-03-01 ETL_TO=2026-03-30 go run cmd/etl-telemetry/main.go
 
 # Migrate a specific site only
 ETL_UTILITY_IDS=05755a6b1a1 go run cmd/etl-telemetry/main.go
@@ -266,6 +269,7 @@ Open Bruno → **Open Collection** → select `docs/api/`, then switch to the **
 | `DELETE` | `/api/v1/gateways/:id`             | Soft-delete + revoke MQTT credentials    |
 | `GET`    | `/api/v1/devices/:id/latest`       | Latest telemetry for a device (SE/CI/SF) |
 | `GET`    | `/api/v1/devices/:id/history`      | Device telemetry history (`?from=&to=`)  |
+| `PATCH`  | `/api/v1/devices/:id`              | Device display name                      |
 | `GET`    | `/api/v1/assignments/:id/latest`   | Latest sensor reading (ST/SP/SR/SO)      |
 | `GET`    | `/api/v1/assignments/:id/history`  | Sensor history (`?from=&to=`)            |
 
