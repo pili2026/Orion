@@ -1,7 +1,7 @@
 services:
   timescaledb:
     image: timescale/timescaledb:latest-pg18
-    container_name: orion-timescaledb
+    container_name: timescaledb
     restart: unless-stopped
     ports:
       - "5432:5432"
@@ -17,6 +17,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    networks:
+      - orion-net
 
   mosquitto:
     image: eclipse-mosquitto:2
@@ -29,6 +31,8 @@ services:
       - /opt/mosquitto/certs:/mosquitto/certs:ro
       - /opt/mosquitto/data:/mosquitto/data
       - /opt/mosquitto/log:/mosquitto/log
+    networks:
+      - orion-net
 
   orion:
     build: .
@@ -68,6 +72,14 @@ services:
       - /opt/mosquitto/certs/ca.crt:/etc/ssl/certs/orion-mqtt-ca.crt:ro
     ports:
       - "8000:8000"
+    networks:
+      - orion-net
 
 volumes:
   timescaledb_data:
+    external: true
+    name: orion_timescaledb_data
+
+networks:
+  orion-net:
+    driver: bridge
