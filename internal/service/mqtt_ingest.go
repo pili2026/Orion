@@ -18,21 +18,9 @@ import (
 )
 
 const (
-	dlqBufferSize = 1024
 	dlqMaxRetries = 3
 	dlqBaseDelay  = 2 * time.Second
 )
-
-// dlqMessage carries a single failed TelemetryReading for retry.
-// Tracking individual readings (rather than the whole payload) prevents
-// duplicate writes of successfully-processed readings on retry.
-type dlqMessage struct {
-	mqttUsername string
-	ts           time.Time // device-side timestamp from the original payload
-	receivedAt   time.Time // Orion receipt time (preserved across retries)
-	reading      dto.TelemetryReading
-	retries      int
-}
 
 const cacheTTL = 30 * time.Minute
 
@@ -61,16 +49,16 @@ type MQTTIngestService struct {
 	cache  map[string]cacheEntry
 	cancel context.CancelFunc
 
-	dlq chan dlqMessage
+	dlq DLQ
 	wg  sync.WaitGroup
 }
 
-func NewMQTTIngestService(db *gorm.DB, repo repository.TelemetryRepository) *MQTTIngestService {
+func NewMQTTIngestService(db *gorm.DB, repo repository.TelemetryRepository, dlq DLQ) *MQTTIngestService {
 	return &MQTTIngestService{
 		db:    db,
 		repo:  repo,
 		cache: make(map[string]cacheEntry),
-		dlq:   make(chan dlqMessage, dlqBufferSize),
+		dlq:   dlq,
 	}
 }
 
@@ -87,7 +75,7 @@ func (s *MQTTIngestService) Start(ctx context.Context) {
 // Call during graceful shutdown, after the MQTT client has been disconnected.
 func (s *MQTTIngestService) Stop() {
 	s.cancel()
-	close(s.dlq)
+	s.dlq.Close()
 	s.wg.Wait()
 }
 
@@ -344,23 +332,13 @@ func (s *MQTTIngestService) cacheEvictWorker(ctx context.Context) {
 // ── Dead-letter queue ─────────────────────────────────────────────────────────
 
 func (s *MQTTIngestService) enqueueDLQ(mqttUsername string, ts, receivedAt time.Time, r dto.TelemetryReading, retries int) {
-	msg := dlqMessage{
-		mqttUsername: mqttUsername,
-		ts:           ts,
-		receivedAt:   receivedAt,
-		reading:      r,
-		retries:      retries,
-	}
-	select {
-	case s.dlq <- msg:
-	default:
-		slog.Error("mqtt_ingest: DLQ channel full, dropping reading",
-			slog.String("mqtt_username", mqttUsername),
-			slog.String("type", r.Type),
-			slog.String("device_code", r.DeviceCode),
-			slog.Int("retries", retries),
-		)
-	}
+	s.dlq.Enqueue(DLQMessage{
+		MQTTUsername: mqttUsername,
+		TS:           ts,
+		ReceivedAt:   receivedAt,
+		Reading:      r,
+		Retries:      retries,
+	})
 }
 
 // dlqWorker processes failed readings with exponential backoff.
@@ -370,18 +348,18 @@ func (s *MQTTIngestService) dlqWorker(ctx context.Context) {
 	defer s.wg.Done()
 	log := slog.Default().With(slog.String("component", "MQTTIngestDLQ"))
 
-	for msg := range s.dlq {
-		if msg.retries >= dlqMaxRetries {
+	s.dlq.Run(ctx, func(ctx context.Context, msg DLQMessage) {
+		if msg.Retries >= dlqMaxRetries {
 			log.Error("DLQ: max retries exceeded, discarding reading",
-				slog.String("mqtt_username", msg.mqttUsername),
-				slog.String("type", msg.reading.Type),
-				slog.String("device_code", msg.reading.DeviceCode),
+				slog.String("mqtt_username", msg.MQTTUsername),
+				slog.String("type", msg.Reading.Type),
+				slog.String("device_code", msg.Reading.DeviceCode),
 			)
-			continue
+			return
 		}
 
 		// Exponential backoff: 2^retries * base (2s, 4s, 8s).
-		delay := dlqBaseDelay * (1 << uint(msg.retries))
+		delay := dlqBaseDelay * (1 << uint(msg.Retries))
 		select {
 		case <-ctx.Done():
 			log.Info("DLQ worker shutting down")
@@ -390,36 +368,36 @@ func (s *MQTTIngestService) dlqWorker(ctx context.Context) {
 		}
 
 		log.Info("DLQ: retrying reading",
-			slog.String("type", msg.reading.Type),
-			slog.String("device_code", msg.reading.DeviceCode),
-			slog.Int("attempt", msg.retries+1),
+			slog.String("type", msg.Reading.Type),
+			slog.String("device_code", msg.Reading.DeviceCode),
+			slog.Int("attempt", msg.Retries+1),
 		)
 
-		gwID, err := s.resolveGateway(ctx, msg.mqttUsername)
+		gwID, err := s.resolveGateway(ctx, msg.MQTTUsername)
 		if err != nil {
 			log.Warn("DLQ: gateway resolution still failing",
-				slog.String("mqtt_username", msg.mqttUsername),
+				slog.String("mqtt_username", msg.MQTTUsername),
 				slog.Any("error", err),
 			)
-			msg.retries++
-			s.enqueueDLQ(msg.mqttUsername, msg.ts, msg.receivedAt, msg.reading, msg.retries)
-			continue
+			msg.Retries++
+			s.enqueueDLQ(msg.MQTTUsername, msg.TS, msg.ReceivedAt, msg.Reading, msg.Retries)
+			return
 		}
 
-		if err := s.processReading(ctx, gwID, msg.ts, msg.receivedAt, msg.reading); err != nil {
+		if err := s.processReading(ctx, gwID, msg.TS, msg.ReceivedAt, msg.Reading); err != nil {
 			log.Warn("DLQ: retry failed",
-				slog.String("type", msg.reading.Type),
-				slog.String("device_code", msg.reading.DeviceCode),
+				slog.String("type", msg.Reading.Type),
+				slog.String("device_code", msg.Reading.DeviceCode),
 				slog.Any("error", err),
 			)
-			msg.retries++
-			s.enqueueDLQ(msg.mqttUsername, msg.ts, msg.receivedAt, msg.reading, msg.retries)
-			continue
+			msg.Retries++
+			s.enqueueDLQ(msg.MQTTUsername, msg.TS, msg.ReceivedAt, msg.Reading, msg.Retries)
+			return
 		}
 
 		log.Info("DLQ: retry succeeded",
-			slog.String("type", msg.reading.Type),
-			slog.String("device_code", msg.reading.DeviceCode),
+			slog.String("type", msg.Reading.Type),
+			slog.String("device_code", msg.Reading.DeviceCode),
 		)
-	}
+	})
 }

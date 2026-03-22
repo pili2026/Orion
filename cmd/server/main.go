@@ -63,7 +63,7 @@ func main() {
 	zoneRepo := repository.NewZoneRepository(dbManager.GormDB)
 	zoneSvc := service.NewZoneService(zoneRepo, siteRepo)
 
-	ingestSvc := service.NewMQTTIngestService(dbManager.GormDB, telemetryRepo)
+	ingestSvc := service.NewMQTTIngestService(dbManager.GormDB, telemetryRepo, service.NewInMemoryDLQ(service.DLQBufferSize))
 	ingestSvc.Start(rootCtx)
 
 	// ── 6. MQTT ──────────────────────────────────────────────────────────────
