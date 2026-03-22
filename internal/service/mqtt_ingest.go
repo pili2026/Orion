@@ -57,8 +57,9 @@ type MQTTIngestService struct {
 	db   *gorm.DB
 	repo repository.TelemetryRepository
 
-	mu    sync.RWMutex
-	cache map[string]cacheEntry
+	mu     sync.RWMutex
+	cache  map[string]cacheEntry
+	cancel context.CancelFunc
 
 	dlq chan dlqMessage
 	wg  sync.WaitGroup
@@ -76,6 +77,7 @@ func NewMQTTIngestService(db *gorm.DB, repo repository.TelemetryRepository) *MQT
 // Start launches the background DLQ retry worker and cache eviction worker.
 // Must be called once after construction, before the MQTT subscriber is active.
 func (s *MQTTIngestService) Start(ctx context.Context) {
+	ctx, s.cancel = context.WithCancel(ctx)
 	s.wg.Add(2)
 	go s.dlqWorker(ctx)
 	go s.cacheEvictWorker(ctx)
@@ -84,6 +86,7 @@ func (s *MQTTIngestService) Start(ctx context.Context) {
 // Stop closes the DLQ channel and waits for both worker goroutines to finish.
 // Call during graceful shutdown, after the MQTT client has been disconnected.
 func (s *MQTTIngestService) Stop() {
+	s.cancel()
 	close(s.dlq)
 	s.wg.Wait()
 }
