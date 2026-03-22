@@ -31,7 +31,7 @@ func TestGetDeviceLatest_OK(t *testing.T) {
 	}
 
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+id.String()+"/latest", nil)
+	req := authedReq(http.MethodGet, "/api/v1/devices/"+id.String()+"/latest", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -50,7 +50,7 @@ func TestGetDeviceLatest_NotFound(t *testing.T) {
 	}
 
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+id.String()+"/latest", nil)
+	req := authedReq(http.MethodGet, "/api/v1/devices/"+id.String()+"/latest", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -65,7 +65,7 @@ func TestGetDeviceLatest_InvalidUUID(t *testing.T) {
 	h, _, _, _, _, _ := newTestHandler()
 	r := h.SetupRouter()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/not-a-uuid/latest", nil)
+	req := authedReq(http.MethodGet, "/api/v1/devices/not-a-uuid/latest", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -90,7 +90,7 @@ func TestGetDeviceHistory_DefaultsTo24h(t *testing.T) {
 	}
 
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+id.String()+"/history", nil)
+	req := authedReq(http.MethodGet, "/api/v1/devices/"+id.String()+"/history", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -110,7 +110,7 @@ func TestGetDeviceHistory_InvalidUUID(t *testing.T) {
 	h, _, _, _, _, _ := newTestHandler()
 	r := h.SetupRouter()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/bad/history", nil)
+	req := authedReq(http.MethodGet, "/api/v1/devices/bad/history", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -126,7 +126,7 @@ func TestGetDeviceHistory_FromAfterTo(t *testing.T) {
 	h, _, _, _, _, _ := newTestHandler()
 	r := h.SetupRouter()
 
-	req := httptest.NewRequest(http.MethodGet,
+	req := authedReq(http.MethodGet,
 		"/api/v1/devices/"+id.String()+"/history?from=2024-06-01&to=2024-01-01", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -150,7 +150,7 @@ func TestGetAssignmentLatest_OK(t *testing.T) {
 	}
 
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/assignments/"+id.String()+"/latest", nil)
+	req := authedReq(http.MethodGet, "/api/v1/assignments/"+id.String()+"/latest", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -176,7 +176,7 @@ func TestGetAssignmentLatest_NotFound(t *testing.T) {
 	}
 
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/assignments/"+id.String()+"/latest", nil)
+	req := authedReq(http.MethodGet, "/api/v1/assignments/"+id.String()+"/latest", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -191,7 +191,7 @@ func TestGetAssignmentLatest_InvalidUUID(t *testing.T) {
 	h, _, _, _, _, _ := newTestHandler()
 	r := h.SetupRouter()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/assignments/not-a-uuid/latest", nil)
+	req := authedReq(http.MethodGet, "/api/v1/assignments/not-a-uuid/latest", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -210,7 +210,7 @@ func TestGetAssignmentLatest_ServiceError(t *testing.T) {
 	}
 
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/assignments/"+id.String()+"/latest", nil)
+	req := authedReq(http.MethodGet, "/api/v1/assignments/"+id.String()+"/latest", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -231,7 +231,7 @@ func TestGetSiteLatest_OK(t *testing.T) {
 	}
 
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+siteID.String()+"/latest", nil)
+	req := authedReq(http.MethodGet, "/api/v1/sites/"+siteID.String()+"/latest", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -246,7 +246,7 @@ func TestGetSiteLatest_InvalidUUID(t *testing.T) {
 	h, _, _, _, _, _ := newTestHandler()
 	r := h.SetupRouter()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/bad/latest", nil)
+	req := authedReq(http.MethodGet, "/api/v1/sites/bad/latest", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 

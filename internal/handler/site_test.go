@@ -29,7 +29,7 @@ func TestListSites_OK(t *testing.T) {
 	}
 
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites", nil)
+	req := authedReq(http.MethodGet, "/api/v1/sites", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -54,7 +54,7 @@ func TestListSites_ServiceError(t *testing.T) {
 	}
 
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites", nil)
+	req := authedReq(http.MethodGet, "/api/v1/sites", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -76,7 +76,7 @@ func TestGetSite_OK(t *testing.T) {
 	}
 
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+id.String(), nil)
+	req := authedReq(http.MethodGet, "/api/v1/sites/"+id.String(), nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -91,7 +91,7 @@ func TestGetSite_InvalidUUID(t *testing.T) {
 	h, _, _, _, _, _ := newTestHandler()
 	r := h.SetupRouter()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/not-a-uuid", nil)
+	req := authedReq(http.MethodGet, "/api/v1/sites/not-a-uuid", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -110,7 +110,7 @@ func TestGetSite_NotFound(t *testing.T) {
 	}
 
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+id.String(), nil)
+	req := authedReq(http.MethodGet, "/api/v1/sites/"+id.String(), nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -129,7 +129,7 @@ func TestCreateSite_OK(t *testing.T) {
 
 	body, _ := json.Marshal(dto.CreateSiteRequest{UtilityID: "A001", NameCN: "測試廠", SiteCode: "test"})
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites", bytes.NewReader(body))
+	req := authedReq(http.MethodPost, "/api/v1/sites", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -145,7 +145,7 @@ func TestCreateSite_InvalidBody(t *testing.T) {
 	h, _, _, _, _, _ := newTestHandler()
 	r := h.SetupRouter()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites", bytes.NewReader([]byte("bad")))
+	req := authedReq(http.MethodPost, "/api/v1/sites", bytes.NewReader([]byte("bad")))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -168,7 +168,7 @@ func TestDeleteSite_OK(t *testing.T) {
 	}
 
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/"+id.String(), nil)
+	req := authedReq(http.MethodDelete, "/api/v1/sites/"+id.String(), nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -194,7 +194,7 @@ func TestListZones_OK(t *testing.T) {
 	}
 
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+siteID.String()+"/zones", nil)
+	req := authedReq(http.MethodGet, "/api/v1/sites/"+siteID.String()+"/zones", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -216,7 +216,7 @@ func TestListZones_InvalidSiteUUID(t *testing.T) {
 	h, _, _, _, _, _ := newTestHandler()
 	r := h.SetupRouter()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/bad-id/zones", nil)
+	req := authedReq(http.MethodGet, "/api/v1/sites/bad-id/zones", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -236,7 +236,7 @@ func TestCreateZone_OK(t *testing.T) {
 
 	body, _ := json.Marshal(dto.CreateZoneRequest{ZoneName: "屋頂", DisplayOrder: 2})
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+siteID.String()+"/zones", bytes.NewReader(body))
+	req := authedReq(http.MethodPost, "/api/v1/sites/"+siteID.String()+"/zones", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -260,7 +260,7 @@ func TestDeleteZone_OK(t *testing.T) {
 	}
 
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/"+siteID.String()+"/zones/"+zoneID.String(), nil)
+	req := authedReq(http.MethodDelete, "/api/v1/sites/"+siteID.String()+"/zones/"+zoneID.String(), nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -280,7 +280,7 @@ func TestDeleteZone_NotFound(t *testing.T) {
 	}
 
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/"+siteID.String()+"/zones/"+zoneID.String(), nil)
+	req := authedReq(http.MethodDelete, "/api/v1/sites/"+siteID.String()+"/zones/"+zoneID.String(), nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 

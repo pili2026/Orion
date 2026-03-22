@@ -2,6 +2,9 @@ package handler
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -159,6 +162,18 @@ type mockDeviceService struct {
 
 func (m *mockDeviceService) Update(ctx context.Context, id uuid.UUID, req dto.UpdateDeviceRequest) (*dto.DeviceResponse, error) {
 	return m.UpdateFn(ctx, id, req)
+}
+
+// ── Request helpers ───────────────────────────────────────────────────────────
+
+// authedReq creates an httptest.Request pre-populated with the dev-admin Bearer
+// token so it passes the Auth middleware in SetupRouter-based tests.
+// For tests that intentionally verify auth/permission failures, build the
+// request manually and set (or omit) the Authorization header as needed.
+func authedReq(method, path string, body io.Reader) *http.Request {
+	req := httptest.NewRequest(method, path, body)
+	req.Header.Set("Authorization", "Bearer dev-admin")
+	return req
 }
 
 // ── Test helper ───────────────────────────────────────────────────────────────

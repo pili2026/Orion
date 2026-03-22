@@ -27,7 +27,7 @@ func TestListGateways_OK(t *testing.T) {
 	}
 
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateways", nil)
+	req := authedReq(http.MethodGet, "/api/v1/gateways", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -52,7 +52,7 @@ func TestListGateways_ServiceError(t *testing.T) {
 	}
 
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateways", nil)
+	req := authedReq(http.MethodGet, "/api/v1/gateways", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -74,7 +74,7 @@ func TestGetGateway_OK(t *testing.T) {
 	}
 
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateways/"+id.String(), nil)
+	req := authedReq(http.MethodGet, "/api/v1/gateways/"+id.String(), nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -89,7 +89,7 @@ func TestGetGateway_InvalidUUID(t *testing.T) {
 	h, _, _, _, _, _ := newTestHandler()
 	r := h.SetupRouter()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateways/not-a-uuid", nil)
+	req := authedReq(http.MethodGet, "/api/v1/gateways/not-a-uuid", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -108,7 +108,7 @@ func TestGetGateway_NotFound(t *testing.T) {
 	}
 
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateways/"+id.String(), nil)
+	req := authedReq(http.MethodGet, "/api/v1/gateways/"+id.String(), nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -137,7 +137,7 @@ func TestRegisterGateway_OK(t *testing.T) {
 	})
 
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/gateways", bytes.NewReader(body))
+	req := authedReq(http.MethodPost, "/api/v1/gateways", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -161,7 +161,7 @@ func TestRegisterGateway_InvalidBody(t *testing.T) {
 	h, _, _, _, _, _ := newTestHandler()
 	r := h.SetupRouter()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/gateways", bytes.NewReader([]byte("not-json")))
+	req := authedReq(http.MethodPost, "/api/v1/gateways", bytes.NewReader([]byte("not-json")))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -184,7 +184,7 @@ func TestDeleteGateway_OK(t *testing.T) {
 	}
 
 	r := h.SetupRouter()
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/gateways/"+id.String(), nil)
+	req := authedReq(http.MethodDelete, "/api/v1/gateways/"+id.String(), nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -199,7 +199,7 @@ func TestDeleteGateway_InvalidUUID(t *testing.T) {
 	h, _, _, _, _, _ := newTestHandler()
 	r := h.SetupRouter()
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/gateways/bad-id", nil)
+	req := authedReq(http.MethodDelete, "/api/v1/gateways/bad-id", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
