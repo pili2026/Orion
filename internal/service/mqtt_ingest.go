@@ -34,6 +34,14 @@ type dlqMessage struct {
 	retries      int
 }
 
+const cacheTTL = 30 * time.Minute
+
+// cacheEntry holds a resolved UUID and its expiry time.
+type cacheEntry struct {
+	id        uuid.UUID
+	expiresAt time.Time
+}
+
 // MQTTIngestService resolves hardware identifiers to UUIDs, dispatches
 // telemetry readings to the correct TimescaleDB hypertable, and retries
 // failed writes via an in-memory dead-letter queue.
@@ -43,15 +51,14 @@ type dlqMessage struct {
 //   - "dev:{gateway_id}:{device_code}"            → device UUID  (SE/CI/SF)
 //   - "sen:{gateway_id}:{device_code}:{pin}"      → assignment UUID (ST/SP/SR/SO)
 //
-// Cache misses trigger a single DB lookup and back-fill the cache on success.
-// Stale cache entries are not a concern because gateway/device metadata rarely
-// changes at runtime; a server restart clears the cache if needed.
+// Each cache entry carries a 30-minute TTL; a background eviction worker
+// removes expired entries every 5 minutes.
 type MQTTIngestService struct {
 	db   *gorm.DB
 	repo repository.TelemetryRepository
 
 	mu    sync.RWMutex
-	cache map[string]uuid.UUID
+	cache map[string]cacheEntry
 
 	dlq chan dlqMessage
 	wg  sync.WaitGroup
@@ -61,19 +68,20 @@ func NewMQTTIngestService(db *gorm.DB, repo repository.TelemetryRepository) *MQT
 	return &MQTTIngestService{
 		db:    db,
 		repo:  repo,
-		cache: make(map[string]uuid.UUID),
+		cache: make(map[string]cacheEntry),
 		dlq:   make(chan dlqMessage, dlqBufferSize),
 	}
 }
 
-// Start launches the background DLQ retry worker.
+// Start launches the background DLQ retry worker and cache eviction worker.
 // Must be called once after construction, before the MQTT subscriber is active.
 func (s *MQTTIngestService) Start(ctx context.Context) {
-	s.wg.Add(1)
+	s.wg.Add(2)
 	go s.dlqWorker(ctx)
+	go s.cacheEvictWorker(ctx)
 }
 
-// Stop closes the DLQ channel and waits for the worker goroutine to finish.
+// Stop closes the DLQ channel and waits for both worker goroutines to finish.
 // Call during graceful shutdown, after the MQTT client has been disconnected.
 func (s *MQTTIngestService) Stop() {
 	close(s.dlq)
@@ -293,14 +301,41 @@ func (s *MQTTIngestService) resolveSensor(ctx context.Context, gwID uuid.UUID, d
 func (s *MQTTIngestService) cacheGet(key string) (uuid.UUID, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	id, ok := s.cache[key]
-	return id, ok
+	entry, ok := s.cache[key]
+	if !ok || time.Now().After(entry.expiresAt) {
+		return uuid.Nil, false
+	}
+	return entry.id, true
 }
 
 func (s *MQTTIngestService) cacheSet(key string, id uuid.UUID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.cache[key] = id
+	s.cache[key] = cacheEntry{id: id, expiresAt: time.Now().Add(cacheTTL)}
+}
+
+// cacheEvictWorker periodically removes expired entries from the cache.
+// It runs every 5 minutes and exits when ctx is cancelled.
+func (s *MQTTIngestService) cacheEvictWorker(ctx context.Context) {
+	defer s.wg.Done()
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now()
+			s.mu.Lock()
+			for k, entry := range s.cache {
+				if now.After(entry.expiresAt) {
+					delete(s.cache, k)
+				}
+			}
+			s.mu.Unlock()
+		}
+	}
 }
 
 // ── Dead-letter queue ─────────────────────────────────────────────────────────
