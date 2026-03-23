@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/hill/orion/internal/model"
 )
@@ -41,7 +42,15 @@ func NewPKIService(db *gorm.DB) *PKIService {
 }
 
 // GetOrCreateCA returns the active CA, creating a new self-signed one on first call.
+//
+// Race safety: the pki_ca table carries a UNIQUE index on the singleton column
+// (always TRUE). On concurrent first-time calls from multiple replicas each
+// generates a candidate CA locally, then attempts INSERT ... ON CONFLICT DO NOTHING.
+// PostgreSQL guarantees exactly one INSERT succeeds; losing replicas observe
+// RowsAffected == 0 and re-read the winner's row, so all callers always return
+// the same single CA regardless of concurrency.
 func (s *PKIService) GetOrCreateCA(ctx context.Context) (*model.PKICA, error) {
+	// Fast path: CA already exists (common case after first boot).
 	var ca model.PKICA
 	err := s.db.WithContext(ctx).Order("created_at DESC").First(&ca).Error
 	if err == nil {
@@ -51,7 +60,7 @@ func (s *PKIService) GetOrCreateCA(ctx context.Context) (*model.PKICA, error) {
 		return nil, fmt.Errorf("query ca: %w", err)
 	}
 
-	// No CA yet — generate one.
+	// No CA yet — generate a candidate locally, then race to insert it.
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generate ca key: %w", err)
@@ -94,11 +103,41 @@ func (s *PKIService) GetOrCreateCA(ctx context.Context) (*model.PKICA, error) {
 		KeyPEM:    keyPEM,
 		ExpiresAt: tmpl.NotAfter,
 		CreatedAt: now,
+		Singleton: true,
 	}
-	if err := s.db.WithContext(ctx).Create(&ca).Error; err != nil {
-		return nil, fmt.Errorf("store ca: %w", err)
+
+	// INSERT ... ON CONFLICT DO NOTHING — only one replica wins.
+	result := s.db.WithContext(ctx).
+		Clauses(clause.OnConflict{DoNothing: true}).
+		Create(&ca)
+	if result.Error != nil {
+		return nil, fmt.Errorf("store ca: %w", result.Error)
 	}
+
+	if result.RowsAffected == 0 {
+		// Another replica inserted first — fetch the canonical CA.
+		if err := s.db.WithContext(ctx).Order("created_at DESC").First(&ca).Error; err != nil {
+			return nil, fmt.Errorf("re-read ca after conflict: %w", err)
+		}
+	}
+
 	return &ca, nil
+}
+
+// RecordRevocation writes an audit entry for a revoked client certificate.
+// See model.RevokedCertSerial for the CRL enforcement TODO.
+func (s *PKIService) RecordRevocation(ctx context.Context, gatewayID uuid.UUID, certSerial, reason string) error {
+	rec := model.RevokedCertSerial{
+		ID:         uuid.New(),
+		GatewayID:  gatewayID,
+		CertSerial: certSerial,
+		RevokedAt:  time.Now().UTC(),
+		Reason:     reason,
+	}
+	if err := s.db.WithContext(ctx).Create(&rec).Error; err != nil {
+		return fmt.Errorf("record revocation: %w", err)
+	}
+	return nil
 }
 
 // IssueClientCert generates a new client certificate for the gateway and

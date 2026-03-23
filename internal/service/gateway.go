@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -187,11 +188,18 @@ func (s *GatewayService) DownloadCert(ctx context.Context, id uuid.UUID) ([]byte
 }
 
 // RevokeCert revokes the current certificate and re-issues a fresh one.
+//
+// TODO(talos-integration): Talos 對接後，MQTT broker 需查詢 revoked_cert_serials
+// 資料表做 CRL 驗證。目前序號僅記錄，尚未實際阻擋舊憑證連線 — 舊的 client.crt
+// 在 MQTT broker 端仍有效直到自然到期（clientValidityYears）。
 func (s *GatewayService) RevokeCert(ctx context.Context, id uuid.UUID) (*dto.GatewayResponse, error) {
 	gw, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
+
+	// Persist the old serial before clearing, so the revocation record is accurate.
+	oldSerial := gw.CertSerial
 
 	// Clear existing cert fields before re-issuing.
 	gw.CertStatus = CertStatusEtlSynced
@@ -203,6 +211,14 @@ func (s *GatewayService) RevokeCert(ctx context.Context, id uuid.UUID) (*dto.Gat
 
 	if err := s.pki.IssueClientCert(ctx, gw); err != nil {
 		return nil, fmt.Errorf("revoke and reissue cert: %w", err)
+	}
+
+	// Write audit record for the revoked serial (non-fatal: log but don't fail
+	// the whole operation if the write fails — the new cert is already issued).
+	if oldSerial != "" {
+		if recErr := s.pki.RecordRevocation(ctx, id, oldSerial, "revoked_by_operator"); recErr != nil {
+			slog.Error("record revocation failed (non-fatal)", slog.Any("error", recErr))
+		}
 	}
 
 	resp := toGatewayResponse(gw)
