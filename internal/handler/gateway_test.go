@@ -20,7 +20,7 @@ func TestListGateways_OK(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	h, _, svc, _, _, _ := newTestHandler()
-	svc.ListFn = func(_ context.Context) ([]dto.GatewayResponse, error) {
+	svc.ListFn = func(_ context.Context, _ *uuid.UUID) ([]dto.GatewayResponse, error) {
 		return []dto.GatewayResponse{
 			{ID: "abc-123", DisplayName: "Test GW", Status: "offline"},
 		}, nil
@@ -47,7 +47,7 @@ func TestListGateways_ServiceError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	h, _, svc, _, _, _ := newTestHandler()
-	svc.ListFn = func(_ context.Context) ([]dto.GatewayResponse, error) {
+	svc.ListFn = func(_ context.Context, _ *uuid.UUID) ([]dto.GatewayResponse, error) {
 		return nil, errors.New("db unavailable")
 	}
 

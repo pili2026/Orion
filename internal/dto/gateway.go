@@ -33,6 +33,11 @@ type GatewayResponse struct {
 	SSHPort       int     `json:"ssh_port"`
 	MQTTUsername  string  `json:"mqtt_username"`
 	LastSeenAt    *string `json:"last_seen_at"`
+	// PKI / certificate state
+	CertStatus    string  `json:"cert_status"`
+	CertIssuedAt  *string `json:"cert_issued_at"`
+	CertExpiresAt *string `json:"cert_expires_at"`
+	CertSerial    string  `json:"cert_serial"`
 	CreatedAt     string  `json:"created_at"`
 	UpdatedAt     string  `json:"updated_at"`
 }

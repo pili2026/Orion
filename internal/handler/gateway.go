@@ -28,10 +28,13 @@ type TelemetryService interface {
 // and makes the handler trivially testable with a mock.
 type GatewayService interface {
 	Register(ctx context.Context, req dto.CreateGatewayRequest) (*dto.RegisterGatewayResponse, error)
-	List(ctx context.Context) ([]dto.GatewayResponse, error)
+	List(ctx context.Context, siteID *uuid.UUID) ([]dto.GatewayResponse, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*dto.GatewayResponse, error)
 	Update(ctx context.Context, id uuid.UUID, req dto.UpdateGatewayRequest) (*dto.GatewayResponse, error)
 	Delete(ctx context.Context, id uuid.UUID) error
+	IssueCert(ctx context.Context, id uuid.UUID) (*dto.GatewayResponse, error)
+	DownloadCert(ctx context.Context, id uuid.UUID) ([]byte, string, error)
+	RevokeCert(ctx context.Context, id uuid.UUID) (*dto.GatewayResponse, error)
 }
 
 // RegisterGateway handles POST /api/v1/gateways.
@@ -54,8 +57,19 @@ func (h *Handler) RegisterGateway(c *gin.Context) {
 }
 
 // ListGateways handles GET /api/v1/gateways.
+// Accepts optional query param ?site_id=<uuid> to filter by site.
 func (h *Handler) ListGateways(c *gin.Context) {
-	gateways, err := h.GatewaySvc.List(c.Request.Context())
+	var siteID *uuid.UUID
+	if raw := c.Query("site_id"); raw != "" {
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid site_id format"})
+			return
+		}
+		siteID = &parsed
+	}
+
+	gateways, err := h.GatewaySvc.List(c.Request.Context(), siteID)
 	if err != nil {
 		slog.Error("ListGateways failed", slog.Any("error", err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list gateways"})
@@ -133,6 +147,73 @@ func (h *Handler) DeleteGateway(c *gin.Context) {
 	}
 
 	c.Status(http.StatusNoContent)
+}
+
+// IssueCert handles POST /api/v1/gateways/:id/issue-cert.
+// Generates a new client certificate and advances cert_status to cert_issued.
+func (h *Handler) IssueCert(c *gin.Context) {
+	id, ok := parseUUID(c, "id")
+	if !ok {
+		return
+	}
+
+	gw, err := h.GatewaySvc.IssueCert(c.Request.Context(), id)
+	if errors.Is(err, apperr.ErrNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "gateway not found"})
+		return
+	}
+	if err != nil {
+		slog.Error("IssueCert failed", slog.String("id", id.String()), slog.Any("error", err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to issue certificate"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gw)
+}
+
+// DownloadCert handles GET /api/v1/gateways/:id/download-cert.
+// Returns a zip archive containing ca.crt, client.crt and client.key.
+func (h *Handler) DownloadCert(c *gin.Context) {
+	id, ok := parseUUID(c, "id")
+	if !ok {
+		return
+	}
+
+	zipBytes, filename, err := h.GatewaySvc.DownloadCert(c.Request.Context(), id)
+	if errors.Is(err, apperr.ErrNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "gateway not found"})
+		return
+	}
+	if err != nil {
+		slog.Error("DownloadCert failed", slog.String("id", id.String()), slog.Any("error", err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build certificate package"})
+		return
+	}
+
+	c.Header("Content-Disposition", "attachment; filename=\""+filename+"\"")
+	c.Data(http.StatusOK, "application/zip", zipBytes)
+}
+
+// RevokeCert handles POST /api/v1/gateways/:id/revoke-cert.
+// Invalidates the current certificate and immediately re-issues a new one.
+func (h *Handler) RevokeCert(c *gin.Context) {
+	id, ok := parseUUID(c, "id")
+	if !ok {
+		return
+	}
+
+	gw, err := h.GatewaySvc.RevokeCert(c.Request.Context(), id)
+	if errors.Is(err, apperr.ErrNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "gateway not found"})
+		return
+	}
+	if err != nil {
+		slog.Error("RevokeCert failed", slog.String("id", id.String()), slog.Any("error", err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke certificate"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gw)
 }
 
 // parseUUID extracts and validates a UUID path parameter.

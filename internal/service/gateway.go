@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -19,13 +20,15 @@ import (
 type GatewayService struct {
 	repo   repository.GatewayRepository
 	dynsec *DynsecService
+	pki    *PKIService
 }
 
 // NewGatewayService creates a new GatewayService.
-func NewGatewayService(repo repository.GatewayRepository, dynsec *DynsecService) *GatewayService {
+func NewGatewayService(repo repository.GatewayRepository, dynsec *DynsecService, pki *PKIService) *GatewayService {
 	return &GatewayService{
 		repo:   repo,
 		dynsec: dynsec,
+		pki:    pki,
 	}
 }
 
@@ -80,9 +83,9 @@ func (s *GatewayService) Register(ctx context.Context, req dto.CreateGatewayRequ
 	}, nil
 }
 
-// List returns all non-deleted gateways.
-func (s *GatewayService) List(ctx context.Context) ([]dto.GatewayResponse, error) {
-	gateways, err := s.repo.List(ctx)
+// List returns all non-deleted gateways, optionally filtered by site_id.
+func (s *GatewayService) List(ctx context.Context, siteID *uuid.UUID) ([]dto.GatewayResponse, error) {
+	gateways, err := s.repo.List(ctx, siteID)
 	if err != nil {
 		return nil, err
 	}
@@ -152,6 +155,77 @@ func (s *GatewayService) Delete(ctx context.Context, id uuid.UUID) error {
 	return s.repo.Delete(ctx, id)
 }
 
+// IssueCert issues a new client certificate for the gateway.
+// The gateway's cert_status is advanced to cert_issued.
+func (s *GatewayService) IssueCert(ctx context.Context, id uuid.UUID) (*dto.GatewayResponse, error) {
+	gw, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.pki.IssueClientCert(ctx, gw); err != nil {
+		return nil, fmt.Errorf("issue cert: %w", err)
+	}
+
+	resp := toGatewayResponse(gw)
+	return &resp, nil
+}
+
+// DownloadCert returns the zip bytes containing ca.crt, client.crt, client.key.
+func (s *GatewayService) DownloadCert(ctx context.Context, id uuid.UUID) ([]byte, string, error) {
+	gw, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, "", err
+	}
+
+	zipBytes, err := s.pki.BuildCertZip(ctx, gw)
+	if err != nil {
+		return nil, "", err
+	}
+
+	filename := fmt.Sprintf("certs_%s.zip", gw.SerialNo)
+	return zipBytes, filename, nil
+}
+
+// RevokeCert revokes the current certificate and re-issues a fresh one.
+//
+// TODO(talos-integration): After Talos integration, the MQTT broker needs to query the revoked_cert_serials
+// table for CRL verification. Currently, serial numbers are only recorded, and connections from old certificates
+// are not yet actually blocked — the old client.crt remains valid on the MQTT broker side until it naturally
+// expires (clientValidityYears).
+func (s *GatewayService) RevokeCert(ctx context.Context, id uuid.UUID) (*dto.GatewayResponse, error) {
+	gw, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	// Persist the old serial before clearing, so the revocation record is accurate.
+	oldSerial := gw.CertSerial
+
+	// Clear existing cert fields before re-issuing.
+	gw.CertStatus = CertStatusEtlSynced
+	gw.ClientCertPEM = ""
+	gw.ClientKeyPEM = ""
+	gw.CertSerial = ""
+	gw.CertIssuedAt = nil
+	gw.CertExpiresAt = nil
+
+	if err := s.pki.IssueClientCert(ctx, gw); err != nil {
+		return nil, fmt.Errorf("revoke and reissue cert: %w", err)
+	}
+
+	// Write audit record for the revoked serial (non-fatal: log but don't fail
+	// the whole operation if the write fails — the new cert is already issued).
+	if oldSerial != "" {
+		if recErr := s.pki.RecordRevocation(ctx, id, oldSerial, "revoked_by_operator"); recErr != nil {
+			slog.Error("record revocation failed (non-fatal)", slog.Any("error", recErr))
+		}
+	}
+
+	resp := toGatewayResponse(gw)
+	return &resp, nil
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 // generatePassword returns a cryptographically random URL-safe string of
@@ -177,6 +251,8 @@ func toGatewayResponse(gw *model.Gateway) dto.GatewayResponse {
 		NetworkStatus: gw.NetworkStatus,
 		SSHPort:       gw.SSHPort,
 		MQTTUsername:  gw.MQTTUsername,
+		CertStatus:    gw.CertStatus,
+		CertSerial:    gw.CertSerial,
 		CreatedAt:     gw.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:     gw.UpdatedAt.Format(time.RFC3339),
 	}
@@ -184,6 +260,14 @@ func toGatewayResponse(gw *model.Gateway) dto.GatewayResponse {
 	if gw.LastSeenAt != nil {
 		t := gw.LastSeenAt.Format(time.RFC3339)
 		resp.LastSeenAt = &t
+	}
+	if gw.CertIssuedAt != nil {
+		t := gw.CertIssuedAt.Format(time.RFC3339)
+		resp.CertIssuedAt = &t
+	}
+	if gw.CertExpiresAt != nil {
+		t := gw.CertExpiresAt.Format(time.RFC3339)
+		resp.CertExpiresAt = &t
 	}
 
 	return resp

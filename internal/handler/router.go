@@ -86,6 +86,10 @@ func (h *Handler) SetupRouter() *gin.Engine {
 			gateways.GET("/:id", h.GetGateway)
 			gateways.PATCH("/:id", middleware.RequirePermission(middleware.PermGatewayWrite), h.UpdateGateway)
 			gateways.DELETE("/:id", middleware.RequirePermission(middleware.PermGatewayDelete), h.DeleteGateway)
+			// PKI / certificate endpoints
+			gateways.POST("/:id/issue-cert", middleware.RequirePermission(middleware.PermGatewayWrite), h.IssueCert)
+			gateways.GET("/:id/download-cert", middleware.RequirePermission(middleware.PermGatewayRead), h.DownloadCert)
+			gateways.POST("/:id/revoke-cert", middleware.RequirePermission(middleware.PermGatewayWrite), h.RevokeCert)
 		}
 
 		// Telemetry — device-level (SE, CI, SF)

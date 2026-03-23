@@ -19,7 +19,9 @@ var ErrGatewayNotFound = fmt.Errorf("gateway not found: %w", apperr.ErrNotFound)
 // GatewayRepository defines the data-access contract for gateways.
 type GatewayRepository interface {
 	Create(ctx context.Context, gw *model.Gateway) error
-	List(ctx context.Context) ([]model.Gateway, error)
+	// List returns all non-deleted gateways. When siteID is non-nil the result is
+	// filtered to that site only.
+	List(ctx context.Context, siteID *uuid.UUID) ([]model.Gateway, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Gateway, error)
 	Update(ctx context.Context, gw *model.Gateway) error
 	Delete(ctx context.Context, id uuid.UUID) error
@@ -41,9 +43,13 @@ func (r *gatewayRepository) Create(ctx context.Context, gw *model.Gateway) error
 	return nil
 }
 
-func (r *gatewayRepository) List(ctx context.Context) ([]model.Gateway, error) {
+func (r *gatewayRepository) List(ctx context.Context, siteID *uuid.UUID) ([]model.Gateway, error) {
 	var gateways []model.Gateway
-	if err := r.db.WithContext(ctx).Find(&gateways).Error; err != nil {
+	q := r.db.WithContext(ctx)
+	if siteID != nil {
+		q = q.Where("site_id = ?", *siteID)
+	}
+	if err := q.Find(&gateways).Error; err != nil {
 		return nil, fmt.Errorf("list gateways: %w", err)
 	}
 	return gateways, nil
