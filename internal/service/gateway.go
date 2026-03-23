@@ -189,9 +189,10 @@ func (s *GatewayService) DownloadCert(ctx context.Context, id uuid.UUID) ([]byte
 
 // RevokeCert revokes the current certificate and re-issues a fresh one.
 //
-// TODO(talos-integration): Talos 對接後，MQTT broker 需查詢 revoked_cert_serials
-// 資料表做 CRL 驗證。目前序號僅記錄，尚未實際阻擋舊憑證連線 — 舊的 client.crt
-// 在 MQTT broker 端仍有效直到自然到期（clientValidityYears）。
+// TODO(talos-integration): After Talos integration, the MQTT broker needs to query the revoked_cert_serials
+// table for CRL verification. Currently, serial numbers are only recorded, and connections from old certificates
+// are not yet actually blocked — the old client.crt remains valid on the MQTT broker side until it naturally
+// expires (clientValidityYears).
 func (s *GatewayService) RevokeCert(ctx context.Context, id uuid.UUID) (*dto.GatewayResponse, error) {
 	gw, err := s.repo.GetByID(ctx, id)
 	if err != nil {
