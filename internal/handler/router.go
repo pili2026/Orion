@@ -88,7 +88,7 @@ func (h *Handler) SetupRouter() *gin.Engine {
 			gateways.DELETE("/:id", middleware.RequirePermission(middleware.PermGatewayDelete), h.DeleteGateway)
 			// PKI / certificate endpoints
 			gateways.POST("/:id/issue-cert", middleware.RequirePermission(middleware.PermGatewayWrite), h.IssueCert)
-			gateways.GET("/:id/download-cert", h.DownloadCert)
+			gateways.GET("/:id/download-cert", middleware.RequirePermission(middleware.PermGatewayRead), h.DownloadCert)
 			gateways.POST("/:id/revoke-cert", middleware.RequirePermission(middleware.PermGatewayWrite), h.RevokeCert)
 		}
 
