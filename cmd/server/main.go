@@ -86,7 +86,8 @@ func main() {
 	// ── 7. Finish wiring (services that depend on mqttClient) ────────────────
 	gatewayRepo := repository.NewGatewayRepository(dbManager.GormDB)
 	dynsec := service.NewDynsecService(mqttClient)
-	gatewaySvc := service.NewGatewayService(gatewayRepo, dynsec)
+	pkiSvc := service.NewPKIService(dbManager.GormDB)
+	gatewaySvc := service.NewGatewayService(gatewayRepo, dynsec, pkiSvc)
 
 	deviceRepo := repository.NewDeviceRepository(dbManager.GormDB)
 	deviceSvc := service.NewDeviceService(deviceRepo)
