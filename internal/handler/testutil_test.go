@@ -57,18 +57,21 @@ func (m *mockMQTTIngestService) ProcessTelemetry(ctx context.Context, mqttUserna
 // ── GatewayService mock ───────────────────────────────────────────────────────
 
 type mockGatewayService struct {
-	RegisterFn func(ctx context.Context, req dto.CreateGatewayRequest) (*dto.RegisterGatewayResponse, error)
-	ListFn     func(ctx context.Context) ([]dto.GatewayResponse, error)
-	GetByIDFn  func(ctx context.Context, id uuid.UUID) (*dto.GatewayResponse, error)
-	UpdateFn   func(ctx context.Context, id uuid.UUID, req dto.UpdateGatewayRequest) (*dto.GatewayResponse, error)
-	DeleteFn   func(ctx context.Context, id uuid.UUID) error
+	RegisterFn    func(ctx context.Context, req dto.CreateGatewayRequest) (*dto.RegisterGatewayResponse, error)
+	ListFn        func(ctx context.Context, siteID *uuid.UUID) ([]dto.GatewayResponse, error)
+	GetByIDFn     func(ctx context.Context, id uuid.UUID) (*dto.GatewayResponse, error)
+	UpdateFn      func(ctx context.Context, id uuid.UUID, req dto.UpdateGatewayRequest) (*dto.GatewayResponse, error)
+	DeleteFn      func(ctx context.Context, id uuid.UUID) error
+	IssueCertFn   func(ctx context.Context, id uuid.UUID) (*dto.GatewayResponse, error)
+	DownloadCertFn func(ctx context.Context, id uuid.UUID) ([]byte, string, error)
+	RevokeCertFn  func(ctx context.Context, id uuid.UUID) (*dto.GatewayResponse, error)
 }
 
 func (m *mockGatewayService) Register(ctx context.Context, req dto.CreateGatewayRequest) (*dto.RegisterGatewayResponse, error) {
 	return m.RegisterFn(ctx, req)
 }
-func (m *mockGatewayService) List(ctx context.Context) ([]dto.GatewayResponse, error) {
-	return m.ListFn(ctx)
+func (m *mockGatewayService) List(ctx context.Context, siteID *uuid.UUID) ([]dto.GatewayResponse, error) {
+	return m.ListFn(ctx, siteID)
 }
 func (m *mockGatewayService) GetByID(ctx context.Context, id uuid.UUID) (*dto.GatewayResponse, error) {
 	return m.GetByIDFn(ctx, id)
@@ -78,6 +81,24 @@ func (m *mockGatewayService) Update(ctx context.Context, id uuid.UUID, req dto.U
 }
 func (m *mockGatewayService) Delete(ctx context.Context, id uuid.UUID) error {
 	return m.DeleteFn(ctx, id)
+}
+func (m *mockGatewayService) IssueCert(ctx context.Context, id uuid.UUID) (*dto.GatewayResponse, error) {
+	if m.IssueCertFn != nil {
+		return m.IssueCertFn(ctx, id)
+	}
+	return nil, nil
+}
+func (m *mockGatewayService) DownloadCert(ctx context.Context, id uuid.UUID) ([]byte, string, error) {
+	if m.DownloadCertFn != nil {
+		return m.DownloadCertFn(ctx, id)
+	}
+	return nil, "", nil
+}
+func (m *mockGatewayService) RevokeCert(ctx context.Context, id uuid.UUID) (*dto.GatewayResponse, error) {
+	if m.RevokeCertFn != nil {
+		return m.RevokeCertFn(ctx, id)
+	}
+	return nil, nil
 }
 
 // ── TelemetryService mock ─────────────────────────────────────────────────────
