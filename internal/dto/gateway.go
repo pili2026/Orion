@@ -33,6 +33,9 @@ type GatewayResponse struct {
 	SSHPort       int     `json:"ssh_port"`
 	MQTTUsername  string  `json:"mqtt_username"`
 	LastSeenAt    *string `json:"last_seen_at"`
+	// Zone associated with this gateway (set by the ETL seeder or CreateZone).
+	ZoneID   *string `json:"zone_id,omitempty"`
+	ZoneName *string `json:"zone_name,omitempty"`
 	// PKI / certificate state
 	CertStatus    string  `json:"cert_status"`
 	CertIssuedAt  *string `json:"cert_issued_at"`

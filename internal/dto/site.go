@@ -32,20 +32,23 @@ type UpdateSiteRequest struct {
 // ── Zone CRUD ─────────────────────────────────────────────────────────────────
 
 type ZoneResponse struct {
-	ID           uuid.UUID `json:"id"`
-	SiteID       uuid.UUID `json:"site_id"`
-	ZoneName     string    `json:"zone_name"`
-	DisplayOrder int       `json:"display_order"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           uuid.UUID  `json:"id"`
+	SiteID       uuid.UUID  `json:"site_id"`
+	GatewayID    *uuid.UUID `json:"gateway_id,omitempty"`
+	ZoneName     string     `json:"zone_name"`
+	DisplayOrder int        `json:"display_order"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 type CreateZoneRequest struct {
-	ZoneName     string `json:"zone_name"     binding:"required"`
-	DisplayOrder int    `json:"display_order"`
+	GatewayID    *string `json:"gateway_id"`
+	ZoneName     string  `json:"zone_name"     binding:"required"`
+	DisplayOrder int     `json:"display_order"`
 }
 
 type UpdateZoneRequest struct {
+	GatewayID    *string `json:"gateway_id"`
 	ZoneName     *string `json:"zone_name"`
 	DisplayOrder *int    `json:"display_order"`
 }

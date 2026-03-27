@@ -4,6 +4,7 @@ package dto
 // All fields are optional — only explicitly provided fields are applied.
 type UpdateDeviceRequest struct {
 	DisplayName *string `json:"display_name"`
+	ZoneID      *string `json:"zone_id"`
 }
 
 // DeviceResponse is the standard device representation returned by the API.

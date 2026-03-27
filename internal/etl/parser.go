@@ -10,24 +10,23 @@ import (
 
 // ParsedTable holds the structured information extracted from a legacy table name.
 //
-// Legacy format: {utility_id}_{loop}{slave_hex}{pin}{type}
+// Legacy format: {utility_id}_{loop}{slave}{pin}{type}
 // Example:       04828405156_1f0sf
 //
 //	utility_id = "04828405156"
 //	loop       = 1
-//	slave_hex  = "f"  → SlaveID = 15
+//	slave      = "f"  (alphanumeric, NOT necessarily valid hex)
 //	pin        = 0
 //	DeviceType = "sf"
 //
-// NOTE: The suffix parser currently assumes 1-digit loop, 1-digit hex slave,
+// NOTE: The suffix parser currently assumes 1-digit loop, 1-alphanumeric-char slave,
 // 1-digit pin, and 2-char device type (total 5 chars).
-// When multi-digit slave IDs are introduced, only parseSuffix() needs updating.
+// When multi-character slave identifiers are introduced, only parseSuffix() needs updating.
 type ParsedTable struct {
 	OldTableName string
 	UtilityID    string
 	Loop         int
-	SlaveID      int    // decimal representation of the hex slave byte
-	SlaveHex     string // original hex string (e.g. "f")
+	Slave        string // raw alphanumeric slave identifier as it appears in the table name (e.g. "f", "m")
 	Pin          int
 	DeviceType   string // lowercase, e.g. "sf", "se", "ci"
 }
@@ -98,11 +97,17 @@ func ParseTableName(tableName string) (*ParsedTable, error) {
 
 // parseSuffix parses the part after the underscore.
 //
-// Current format (5 chars): {1-loop}{1-hex-slave}{1-pin}{2-type}
+// Current format (5 chars): {1-loop}{1-alnum-slave}{1-pin}{2-type}
 //
-// To support multi-digit slave IDs in the future, update the slaveEnd index
-// and adjust the pin/type extraction accordingly. The rest of the ETL pipeline
-// does not need to change.
+// The slave field is treated as a raw alphanumeric string — no numeric conversion
+// is performed. Legacy data contains non-hex characters (e.g. "m") that would
+// cause strconv.ParseInt(s, 16, 64) to fail.
+//
+// TODO(multi-char-slave): The slave field is currently assumed to be exactly
+// 1 character (suffix[1:2]). If future device hardware introduces multi-character
+// slave identifiers, adjust slaveEnd below and update device_code generation in
+// seeder.go accordingly. The split point between slave and pin depends on this
+// constant, so changing it here is the single place that needs updating.
 func parseSuffix(suffix string) (*ParsedTable, error) {
 	// Minimum length: 1 (loop) + 1 (slave) + 1 (pin) + 2 (type) = 5
 	if len(suffix) < 5 {
@@ -115,14 +120,12 @@ func parseSuffix(suffix string) (*ParsedTable, error) {
 		return nil, fmt.Errorf("loop char %q is not a digit: %w", string(suffix[0]), err)
 	}
 
-	// ── slave_id (1 hex digit) ────────────────────────────────────────────────
-	// FUTURE: change slaveEnd to 3 or 4 to support 2- or 3-digit hex slaves.
+	// ── slave (1 alphanumeric char) ───────────────────────────────────────────
+	// Stored as-is without any numeric conversion. Legacy tables use characters
+	// outside the hex range (0-9, a-f), so no ParseInt is applied here.
+	// TODO(multi-char-slave): Change slaveEnd to widen the slave field if needed.
 	const slaveEnd = 2 // exclusive index: suffix[1:slaveEnd]
-	slaveHex := suffix[1:slaveEnd]
-	slaveVal, err := strconv.ParseInt(slaveHex, 16, 64)
-	if err != nil {
-		return nil, fmt.Errorf("slave hex %q is not valid hex: %w", slaveHex, err)
-	}
+	slave := suffix[1:slaveEnd]
 
 	// ── pin (1 digit, decimal) ────────────────────────────────────────────────
 	pin, err := strconv.Atoi(string(suffix[slaveEnd]))
@@ -138,8 +141,7 @@ func parseSuffix(suffix string) (*ParsedTable, error) {
 
 	return &ParsedTable{
 		Loop:       loop,
-		SlaveID:    int(slaveVal),
-		SlaveHex:   slaveHex,
+		Slave:      slave,
 		Pin:        pin,
 		DeviceType: deviceType,
 	}, nil

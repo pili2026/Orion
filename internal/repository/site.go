@@ -85,6 +85,9 @@ func (r *siteRepository) Delete(ctx context.Context, id uuid.UUID) error {
 type ZoneRepository interface {
 	ListBySite(ctx context.Context, siteID uuid.UUID) ([]model.Zone, error)
 	GetByID(ctx context.Context, siteID, zoneID uuid.UUID) (*model.Zone, error)
+	// GetByGatewayID returns the Zone associated with the given gateway, or
+	// ErrZoneNotFound if no zone with that gateway_id exists.
+	GetByGatewayID(ctx context.Context, gatewayID uuid.UUID) (*model.Zone, error)
 	Create(ctx context.Context, zone *model.Zone) error
 	Update(ctx context.Context, zone *model.Zone) error
 	Delete(ctx context.Context, siteID, zoneID uuid.UUID) error
@@ -117,6 +120,19 @@ func (r *zoneRepository) GetByID(ctx context.Context, siteID, zoneID uuid.UUID) 
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get zone: %w", err)
+	}
+	return &zone, nil
+}
+
+func (r *zoneRepository) GetByGatewayID(ctx context.Context, gatewayID uuid.UUID) (*model.Zone, error) {
+	var zone model.Zone
+	err := r.db.WithContext(ctx).
+		First(&zone, "gateway_id = ?", gatewayID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrZoneNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get zone by gateway_id: %w", err)
 	}
 	return &zone, nil
 }

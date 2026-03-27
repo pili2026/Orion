@@ -46,8 +46,28 @@ func NewMetaSeeder(srcDB, dstDB *gorm.DB) *MetaSeeder {
 // Run performs the full metadata seeding process:
 //  1. Lists all tables in the legacy schema.
 //  2. Parses each table name.
-//  3. Creates Sites, Gateways, and Devices in Orion (idempotent upserts).
+//  3. Creates Sites, Gateways, Zones, and Devices in Orion (idempotent upserts).
 //  4. Writes the old_table_name → device/assignment UUID mapping to etl_table_map.
+//
+// Zone strategy: one Zone is created per Gateway (not per Site). The Zone is
+// assigned gateway_id = gw.ID so the UI can associate each Zone with its edge
+// device. All Devices under a Gateway are initially placed in that Gateway's Zone.
+// Operators can later reassign Devices to manually-created Zones via PATCH /devices/:id.
+//
+// # Data migration note for existing deployments
+//
+// If this seeder was run before migration 008 (which adds zones.gateway_id),
+// each Site has a single "default" Zone with gateway_id = NULL, and all Devices
+// point to it. After applying migration 008 and re-running this seeder, each
+// Gateway gets its own Zone. The old per-site "default" zones are left in place
+// (they still exist with gateway_id = NULL). To clean up, run:
+//
+//	-- Identify orphan default zones (no gateway association, zone_name = 'default')
+//	SELECT id, site_id FROM zones WHERE zone_name = 'default' AND gateway_id IS NULL AND deleted_at IS NULL;
+//
+//	-- After confirming devices have been migrated to the new per-gateway zones,
+//	-- soft-delete the old default zones:
+//	UPDATE zones SET deleted_at = NOW() WHERE zone_name = 'default' AND gateway_id IS NULL AND deleted_at IS NULL;
 func (s *MetaSeeder) Run(ctx context.Context, srcSchema string) error {
 	log := slog.Default().With(slog.String("component", "MetaSeeder"))
 
@@ -75,11 +95,10 @@ func (s *MetaSeeder) Run(ctx context.Context, srcSchema string) error {
 	}
 	log.Info("Parsed device tables", slog.Int("count", len(parsed)))
 
-	// ── 3. Collect unique sites and gateways ──────────────────────────────────
+	// ── 4. Collect unique sites and gateways ──────────────────────────────────
 	// Use maps to deduplicate before hitting the DB.
-	siteMap := make(map[string]*model.Site)        // utility_id → Site
-	gatewayMap := make(map[string]*model.Gateway)  // GatewayKey → Gateway
-	defaultZoneMap := make(map[string]*model.Zone) // utility_id → default Zone
+	siteMap    := make(map[string]*model.Site)    // utility_id → Site
+	gatewayMap := make(map[string]*model.Gateway) // GatewayKey → Gateway
 
 	for _, p := range parsed {
 		if _, ok := siteMap[p.UtilityID]; !ok {
@@ -103,28 +122,12 @@ func (s *MetaSeeder) Run(ctx context.Context, srcSchema string) error {
 		}
 	}
 
-	// ── 4. Upsert sites ───────────────────────────────────────────────────────
+	// ── 5. Upsert sites ───────────────────────────────────────────────────────
 	for _, site := range siteMap {
 		if err := s.upsertSite(ctx, site); err != nil {
 			return fmt.Errorf("upsert site %q: %w", site.UtilityID, err)
 		}
 		log.Info("Site ready", slog.String("utility_id", site.UtilityID), slog.String("id", site.ID.String()))
-	}
-
-	// ── 5. Upsert default zones (one per site, used as placeholder for devices) ─
-	for _, site := range siteMap {
-		zone := &model.Zone{
-			SiteID:       site.ID,
-			ZoneName:     "default",
-			DisplayOrder: 0,
-		}
-		if err := s.dstDB.WithContext(ctx).
-			Where(model.Zone{SiteID: site.ID, ZoneName: "default"}).
-			FirstOrCreate(zone).Error; err != nil {
-			return fmt.Errorf("upsert default zone for site %q: %w", site.UtilityID, err)
-		}
-		defaultZoneMap[site.UtilityID] = zone
-		log.Info("Default zone ready", slog.String("utility_id", site.UtilityID), slog.String("zone_id", zone.ID.String()))
 	}
 
 	// ── 6. Upsert gateways (now that site IDs are known) ─────────────────────
@@ -141,7 +144,28 @@ func (s *MetaSeeder) Run(ctx context.Context, srcSchema string) error {
 		log.Info("Gateway ready", slog.String("serial_no", gw.SerialNo), slog.String("id", gw.ID.String()))
 	}
 
-	// ── 7. Upsert devices + build etl_table_map ───────────────────────────────
+	// ── 7. Upsert zones — one per gateway, tied via gateway_id ───────────────
+	// This replaces the previous per-site "default" zone approach. Each Gateway
+	// now gets its own Zone so the UI can distinguish which Zone belongs to
+	// which physical edge device.
+	gatewayZoneMap := make(map[string]*model.Zone) // GatewayKey → Zone
+	for key, gw := range gatewayMap {
+		zone := &model.Zone{
+			SiteID:       gw.SiteID,
+			GatewayID:    &gw.ID,
+			ZoneName:     "default",
+			DisplayOrder: 0,
+		}
+		if err := s.dstDB.WithContext(ctx).
+			Where(model.Zone{GatewayID: &gw.ID}).
+			FirstOrCreate(zone).Error; err != nil {
+			return fmt.Errorf("upsert zone for gateway %q: %w", gw.SerialNo, err)
+		}
+		gatewayZoneMap[key] = zone
+		log.Info("Zone ready", slog.String("gateway", gw.SerialNo), slog.String("zone_id", zone.ID.String()))
+	}
+
+	// ── 8. Upsert devices + build etl_table_map ───────────────────────────────
 	for _, p := range parsed {
 		// Skip GW tables — they are operational data, not telemetry.
 		if strings.ToLower(p.DeviceType) == "gw" {
@@ -151,9 +175,9 @@ func (s *MetaSeeder) Run(ctx context.Context, srcSchema string) error {
 
 		gw := gatewayMap[p.GatewayKey()]
 		site := siteMap[p.UtilityID]
-		defaultZone := defaultZoneMap[p.UtilityID]
+		gwZone := gatewayZoneMap[p.GatewayKey()]
 
-		entry, err := s.upsertDeviceAndMapping(ctx, p, gw, site, defaultZone)
+		entry, err := s.upsertDeviceAndMapping(ctx, p, gw, site, gwZone)
 		if err != nil {
 			return fmt.Errorf("upsert device for table %q: %w", p.OldTableName, err)
 		}
@@ -216,14 +240,14 @@ func (s *MetaSeeder) upsertDeviceAndMapping(
 	p *ParsedTable,
 	gw *model.Gateway,
 	_ *model.Site,
-	defaultZone *model.Zone,
+	gwZone *model.Zone,
 ) (*ETLTableMap, error) {
 	// device_code encodes loop+slave+pin so it is unique within a gateway.
-	deviceCode := fmt.Sprintf("%d%s%d", p.Loop, p.SlaveHex, p.Pin)
+	deviceCode := fmt.Sprintf("%d%s%d", p.Loop, p.Slave, p.Pin)
 
 	device := &model.Device{
 		GatewayID:      gw.ID,
-		ZoneID:         defaultZone.ID, // placeholder — reassign zones manually after seeding
+		ZoneID:         gwZone.ID, // gateway's own zone — reassign manually after seeding
 		DeviceTypeCode: strings.ToUpper(p.DeviceType),
 		DeviceCode:     deviceCode,
 		FuncTag:        fmt.Sprintf("%s_%s", strings.ToUpper(p.DeviceType), deviceCode),
@@ -283,12 +307,14 @@ func (s *MetaSeeder) upsertSensorAssignment(
 	}
 
 	now := time.Now()
+	// device_code = "{loop}{slave}{pin}" — matches the format used in upsertDeviceAndMapping.
+	deviceCode := fmt.Sprintf("%d%s%d", p.Loop, p.Slave, p.Pin)
 	assignment := &model.PointAssignment{
 		PointID:        point.ID,
 		ZoneID:         device.ZoneID,
 		SensorTypeCode: strings.ToUpper(p.DeviceType),
-		SensorName:     fmt.Sprintf("%s_%d%s%d", strings.ToUpper(p.DeviceType), p.Loop, p.SlaveHex, p.Pin),
-		FuncTag:        fmt.Sprintf("%s_%d%s%d", strings.ToUpper(p.DeviceType), p.Loop, p.SlaveHex, p.Pin),
+		SensorName:     fmt.Sprintf("%s_%s", strings.ToUpper(p.DeviceType), deviceCode),
+		FuncTag:        fmt.Sprintf("%s_%s", strings.ToUpper(p.DeviceType), deviceCode),
 		ActiveFrom:     &now,
 	}
 	if err := s.dstDB.WithContext(ctx).
