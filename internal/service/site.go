@@ -104,12 +104,13 @@ type ZoneService interface {
 }
 
 type zoneService struct {
-	repo     repository.ZoneRepository
-	siteRepo repository.SiteRepository
+	repo        repository.ZoneRepository
+	siteRepo    repository.SiteRepository
+	gatewayRepo repository.GatewayRepository
 }
 
-func NewZoneService(repo repository.ZoneRepository, siteRepo repository.SiteRepository) ZoneService {
-	return &zoneService{repo: repo, siteRepo: siteRepo}
+func NewZoneService(repo repository.ZoneRepository, siteRepo repository.SiteRepository, gatewayRepo repository.GatewayRepository) ZoneService {
+	return &zoneService{repo: repo, siteRepo: siteRepo, gatewayRepo: gatewayRepo}
 }
 
 func (s *zoneService) List(ctx context.Context, siteID uuid.UUID) ([]dto.ZoneResponse, error) {
@@ -133,11 +134,29 @@ func (s *zoneService) Create(ctx context.Context, siteID uuid.UUID, req dto.Crea
 	if _, err := s.siteRepo.GetByID(ctx, siteID); err != nil {
 		return nil, err
 	}
+
 	zone := &model.Zone{
 		SiteID:       siteID,
 		ZoneName:     req.ZoneName,
 		DisplayOrder: req.DisplayOrder,
 	}
+
+	// If gateway_id is provided, validate it belongs to the same site.
+	if req.GatewayID != nil && *req.GatewayID != "" {
+		gwID, err := uuid.Parse(*req.GatewayID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid gateway_id: %w", err)
+		}
+		gw, err := s.gatewayRepo.GetByID(ctx, gwID)
+		if err != nil {
+			return nil, fmt.Errorf("gateway not found: %w", err)
+		}
+		if gw.SiteID != siteID {
+			return nil, fmt.Errorf("gateway %s does not belong to site %s: %w", gwID, siteID, repository.ErrGatewayNotFound)
+		}
+		zone.GatewayID = &gwID
+	}
+
 	if err := s.repo.Create(ctx, zone); err != nil {
 		return nil, fmt.Errorf("create zone: %w", err)
 	}
@@ -155,6 +174,23 @@ func (s *zoneService) Update(ctx context.Context, siteID, zoneID uuid.UUID, req 
 	if req.DisplayOrder != nil {
 		zone.DisplayOrder = *req.DisplayOrder
 	}
+
+	// If gateway_id is provided, validate it belongs to the same site.
+	if req.GatewayID != nil && *req.GatewayID != "" {
+		gwID, err := uuid.Parse(*req.GatewayID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid gateway_id: %w", err)
+		}
+		gw, err := s.gatewayRepo.GetByID(ctx, gwID)
+		if err != nil {
+			return nil, fmt.Errorf("gateway not found: %w", err)
+		}
+		if gw.SiteID != siteID {
+			return nil, fmt.Errorf("gateway %s does not belong to site %s: %w", gwID, siteID, repository.ErrGatewayNotFound)
+		}
+		zone.GatewayID = &gwID
+	}
+
 	if err := s.repo.Update(ctx, zone); err != nil {
 		return nil, err
 	}
@@ -174,6 +210,7 @@ func toZoneResponse(zone model.Zone) dto.ZoneResponse {
 	return dto.ZoneResponse{
 		ID:           zone.ID,
 		SiteID:       zone.SiteID,
+		GatewayID:    zone.GatewayID,
 		ZoneName:     zone.ZoneName,
 		DisplayOrder: zone.DisplayOrder,
 		CreatedAt:    zone.CreatedAt,

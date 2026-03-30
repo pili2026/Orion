@@ -61,7 +61,6 @@ func main() {
 	siteSvc := service.NewSiteService(siteRepo)
 
 	zoneRepo := repository.NewZoneRepository(dbManager.GormDB)
-	zoneSvc := service.NewZoneService(zoneRepo, siteRepo)
 
 	ingestSvc := service.NewMQTTIngestService(dbManager.GormDB, telemetryRepo, service.NewInMemoryDLQ(service.DLQBufferSize))
 	ingestSvc.Start(rootCtx)
@@ -87,10 +86,12 @@ func main() {
 	gatewayRepo := repository.NewGatewayRepository(dbManager.GormDB)
 	dynsec := service.NewDynsecService(mqttClient)
 	pkiSvc := service.NewPKIService(dbManager.GormDB)
-	gatewaySvc := service.NewGatewayService(gatewayRepo, dynsec, pkiSvc)
+	gatewaySvc := service.NewGatewayService(gatewayRepo, zoneRepo, dynsec, pkiSvc)
+
+	zoneSvc := service.NewZoneService(zoneRepo, siteRepo, gatewayRepo)
 
 	deviceRepo := repository.NewDeviceRepository(dbManager.GormDB)
-	deviceSvc := service.NewDeviceService(deviceRepo)
+	deviceSvc := service.NewDeviceService(deviceRepo, gatewayRepo, zoneRepo)
 
 	authn := middleware.NewStubAuthenticator()
 	h = handler.NewHandler(dbManager, mqttClient, gatewaySvc, telemetrySvc, siteSvc, zoneSvc, ingestSvc, deviceSvc, authn)

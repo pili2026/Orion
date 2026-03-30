@@ -18,17 +18,19 @@ import (
 
 // GatewayService handles all business logic for gateway registration.
 type GatewayService struct {
-	repo   repository.GatewayRepository
-	dynsec *DynsecService
-	pki    *PKIService
+	repo     repository.GatewayRepository
+	zoneRepo repository.ZoneRepository
+	dynsec   *DynsecService
+	pki      *PKIService
 }
 
 // NewGatewayService creates a new GatewayService.
-func NewGatewayService(repo repository.GatewayRepository, dynsec *DynsecService, pki *PKIService) *GatewayService {
+func NewGatewayService(repo repository.GatewayRepository, zoneRepo repository.ZoneRepository, dynsec *DynsecService, pki *PKIService) *GatewayService {
 	return &GatewayService{
-		repo:   repo,
-		dynsec: dynsec,
-		pki:    pki,
+		repo:     repo,
+		zoneRepo: zoneRepo,
+		dynsec:   dynsec,
+		pki:      pki,
 	}
 }
 
@@ -76,7 +78,7 @@ func (s *GatewayService) Register(ctx context.Context, req dto.CreateGatewayRequ
 	}
 
 	return &dto.RegisterGatewayResponse{
-		Gateway:      toGatewayResponse(gw),
+		Gateway:      toGatewayResponse(gw, nil), // no zone yet at registration time
 		MQTTPassword: mqttPassword,
 		MQTTBroker:   os.Getenv("MQTT_BROKER"),
 		MQTTPort:     os.Getenv("MQTT_PORT"),
@@ -92,7 +94,8 @@ func (s *GatewayService) List(ctx context.Context, siteID *uuid.UUID) ([]dto.Gat
 
 	responses := make([]dto.GatewayResponse, len(gateways))
 	for i, gw := range gateways {
-		responses[i] = toGatewayResponse(&gw)
+		zone, _ := s.zoneRepo.GetByGatewayID(ctx, gw.ID) // nil zone is fine — omitted from response
+		responses[i] = toGatewayResponse(&gw, zone)
 	}
 	return responses, nil
 }
@@ -103,7 +106,8 @@ func (s *GatewayService) GetByID(ctx context.Context, id uuid.UUID) (*dto.Gatewa
 	if err != nil {
 		return nil, err
 	}
-	resp := toGatewayResponse(gw)
+	zone, _ := s.zoneRepo.GetByGatewayID(ctx, gw.ID) // nil zone is fine — omitted from response
+	resp := toGatewayResponse(gw, zone)
 	return &resp, nil
 }
 
@@ -135,7 +139,8 @@ func (s *GatewayService) Update(ctx context.Context, id uuid.UUID, req dto.Updat
 		return nil, err
 	}
 
-	resp := toGatewayResponse(gw)
+	zone, _ := s.zoneRepo.GetByGatewayID(ctx, gw.ID)
+	resp := toGatewayResponse(gw, zone)
 	return &resp, nil
 }
 
@@ -167,7 +172,8 @@ func (s *GatewayService) IssueCert(ctx context.Context, id uuid.UUID) (*dto.Gate
 		return nil, fmt.Errorf("issue cert: %w", err)
 	}
 
-	resp := toGatewayResponse(gw)
+	zone, _ := s.zoneRepo.GetByGatewayID(ctx, gw.ID)
+	resp := toGatewayResponse(gw, zone)
 	return &resp, nil
 }
 
@@ -222,7 +228,8 @@ func (s *GatewayService) RevokeCert(ctx context.Context, id uuid.UUID) (*dto.Gat
 		}
 	}
 
-	resp := toGatewayResponse(gw)
+	zone, _ := s.zoneRepo.GetByGatewayID(ctx, gw.ID)
+	resp := toGatewayResponse(gw, zone)
 	return &resp, nil
 }
 
@@ -238,8 +245,9 @@ func generatePassword(n int) (string, error) {
 	return base64.URLEncoding.EncodeToString(b), nil
 }
 
-// toGatewayResponse maps a model.Gateway to its DTO representation.
-func toGatewayResponse(gw *model.Gateway) dto.GatewayResponse {
+// toGatewayResponse maps a model.Gateway (and its optional associated Zone) to
+// the DTO representation. zone may be nil when no zone has been assigned yet.
+func toGatewayResponse(gw *model.Gateway, zone *model.Zone) dto.GatewayResponse {
 	resp := dto.GatewayResponse{
 		ID:            gw.ID.String(),
 		SiteID:        gw.SiteID.String(),
@@ -268,6 +276,12 @@ func toGatewayResponse(gw *model.Gateway) dto.GatewayResponse {
 	if gw.CertExpiresAt != nil {
 		t := gw.CertExpiresAt.Format(time.RFC3339)
 		resp.CertExpiresAt = &t
+	}
+
+	if zone != nil {
+		zoneID := zone.ID.String()
+		resp.ZoneID = &zoneID
+		resp.ZoneName = &zone.ZoneName
 	}
 
 	return resp
